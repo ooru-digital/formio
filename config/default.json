@@ -1,10 +1,10 @@
 {
   "port": 3001,
   "appPort": 8080,
-  "host": "https://core.ci.za.dpi-poc.com/formio",
+  "host": "https://staging-core.credissuer.com/formio",
   "protocol": "http",
   "allowedOrigins": ["*"],
-  "domain": "https://core.ci.za.dpi-poc.com/formio",
+  "domain": "https://staging-core.credissuer.com/formio",
   "basePath": "",
   "mongo": "mongodb://localhost:27017/formioapp",
   "mongoConfig": "",
