@@ -1,4 +1,5 @@
 version: "3.8"
+
 services:
   mongo:
     image: mongo
@@ -8,12 +9,12 @@ services:
     environment:
       - MONGO_INITDB_ROOT_USERNAME
       - MONGO_INITDB_ROOT_PASSWORD
+      - FORMIO_APP_INSTALL=true
+
   formio:
-    build:
-      context: ./
-      dockerfile: Dockerfile
+    image: index.docker.io/ooruio/formio-prod
     restart: always
-    links:
+    depends_on:
       - mongo
     ports:
       - "3001:3001"
@@ -24,5 +25,6 @@ services:
       ROOT_PASSWORD: CHANGEME
     stdin_open: true # -i
     tty: true # -t
+
 volumes:
   mdb-data:

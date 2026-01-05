@@ -1,10 +1,10 @@
 {
   "port": 3001,
   "appPort": 8080,
-  "host": "https://staging-core.credissuer.com/formio",
+  "host": "https://prod-temp-core.credissuer.com/formio",
   "protocol": "http",
   "allowedOrigins": ["*"],
-  "domain": "https://staging-core.credissuer.com/formio",
+  "domain": "https://prod-temp-core.credissuer.com/formio",
   "basePath": "",
   "mongo": "mongodb://localhost:27017/formioapp",
   "mongoConfig": "",
