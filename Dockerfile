@@ -30,7 +30,7 @@ COPY config/ /app/config
 COPY *.js /app/
 COPY *.txt /app/
 
-# Stage 2: Runtime
+
 FROM node:20-alpine
 
 WORKDIR /app
@@ -51,3 +51,4 @@ ENV DEBUG=""
 # This will initialize the application based on
 # some questions to the user (login email, password, etc.)
 ENTRYPOINT [ "node", "--no-node-snapshot", "main" ]
+
