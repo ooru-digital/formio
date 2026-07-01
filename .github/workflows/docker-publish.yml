@@ -1,0 +1,75 @@
+name: Docker Build, Scan & Publish
+
+on:
+  push:
+    branches: [main]
+
+env:
+  IMAGE_NAME: ooruio/formio
+
+jobs:
+  ###################################################################################
+  ## Credential Scanning (Pre-hook)
+  ###################################################################################
+  credential-scan:
+    runs-on: self-hosted
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  ###################################################################################
+  ## Build, Scan, Push, Cleanup
+  ###################################################################################
+  build-scan-push:
+    needs: [credential-scan]
+    runs-on: self-hosted
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v3
+
+      - name: Set image tag
+        run: echo "IMAGE_TAG=${{ env.IMAGE_NAME }}:${{ github.sha }}" >> $GITHUB_ENV
+
+      - name: Build Docker image
+        run: docker build -t ${{ env.IMAGE_TAG }} -t ${{ env.IMAGE_NAME }}:latest .
+
+      - name: Trivy vulnerability scan (report only, does not fail build)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ env.IMAGE_TAG }}
+          scanners: vuln
+          format: table
+          exit-code: '0'
+          severity: CRITICAL,HIGH
+
+      - name: Trivy secret/misconfig scan (fails build on findings)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ env.IMAGE_TAG }}
+          scanners: secret,misconfig
+          format: table
+          exit-code: '1'
+          severity: CRITICAL,HIGH
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Push image to registry
+        run: |
+          docker push ${{ env.IMAGE_TAG }}
+          docker push ${{ env.IMAGE_NAME }}:latest
+
+      - name: Remove local image
+        if: always()
+        run: |
+          docker rmi ${{ env.IMAGE_TAG }} ${{ env.IMAGE_NAME }}:latest || true
