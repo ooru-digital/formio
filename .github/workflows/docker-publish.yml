@@ -39,7 +39,7 @@ jobs:
         run: docker build -t ${{ env.IMAGE_TAG }} .
 
       - name: Trivy vulnerability scan (report only, does not fail build)
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@0.36.0
         with:
           image-ref: ${{ env.IMAGE_TAG }}
           scanners: vuln
@@ -48,7 +48,7 @@ jobs:
           severity: CRITICAL,HIGH
 
       - name: Trivy secret/misconfig scan (fails build on findings)
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@0.36.0
         with:
           image-ref: ${{ env.IMAGE_TAG }}
           scanners: secret,misconfig
