@@ -1,0 +1,145 @@
+name: Deploy To EKS
+
+on:
+  workflow_call:
+    inputs:
+      aws_region:
+        required: true
+        type: string
+      aws_role_to_assume:
+        required: true
+        type: string
+      eks_cluster_name:
+        required: true
+        type: string
+      kubernetes_namespace:
+        required: true
+        type: string
+      manifest_dir:
+        required: true
+        type: string
+      docker_image:
+        required: true
+        type: string
+      image_pull_secret_name:
+        required: false
+        type: string
+        default: dockerhub-registry
+      deployment_name:
+        required: false
+        type: string
+        default: formio
+      container_name:
+        required: false
+        type: string
+        default: formio
+    secrets:
+      dockerhub_username:
+        required: true
+      dockerhub_token:
+        required: true
+      discord_webhook:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy To EKS
+    runs-on: [self-hosted, linux, x64, aws]
+    # Use this only if your cluster endpoint is publicly reachable:
+    # runs-on: ubuntu-latest
+
+    env:
+      DISCORD_WEBHOOK: ${{ secrets.discord_webhook }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ inputs.aws_region }}
+          role-to-assume: ${{ inputs.aws_role_to_assume }}
+          role-chaining: true
+          role-skip-session-tagging: true
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: latest
+
+      - name: Install envsubst
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gettext-base
+
+      - name: Configure kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --name "${{ inputs.eks_cluster_name }}" \
+            --region "${{ inputs.aws_region }}"
+
+      - name: Verify cluster access
+        run: |
+          kubectl config current-context
+          kubectl get nodes
+
+      - name: Ensure namespace exists
+        run: |
+          kubectl get namespace "${{ inputs.kubernetes_namespace }}" >/dev/null 2>&1 || \
+          kubectl create namespace "${{ inputs.kubernetes_namespace }}"
+
+      - name: Create or update Docker Hub image pull secret
+        run: |
+          kubectl create secret docker-registry "${{ inputs.image_pull_secret_name }}" \
+            --namespace "${{ inputs.kubernetes_namespace }}" \
+            --docker-server="https://index.docker.io/v1/" \
+            --docker-username="${{ secrets.dockerhub_username }}" \
+            --docker-password="${{ secrets.dockerhub_token }}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Render Kubernetes manifests
+        env:
+          BP_IMAGE_URI: ${{ inputs.docker_image }}
+          DOCKER_IMAGE: ${{ inputs.docker_image }}
+          IMAGE_PULL_SECRET_NAME: ${{ inputs.image_pull_secret_name }}
+        run: |
+          mkdir -p rendered-manifests
+
+          while IFS= read -r file; do
+            envsubst < "$file" > "rendered-manifests/$(basename "$file")"
+          done < <(find "${{ inputs.manifest_dir }}" -type f -name '*.yaml' | sort)
+
+      - name: Apply Kubernetes manifests one by one
+        run: |
+          find rendered-manifests -maxdepth 1 -type f -name '*.yaml' | sort | while read -r file; do
+            echo "Applying $file"
+            kubectl apply -f "$file"
+          done
+
+      - name: Update deployment image
+        run: |
+          kubectl set image deployment/${{ inputs.deployment_name }} \
+            ${{ inputs.container_name }}=${{ inputs.docker_image }} \
+            --namespace "${{ inputs.kubernetes_namespace }}"
+
+      - name: Wait for rollout
+        run: |
+          kubectl rollout status deployment/${{ inputs.deployment_name }} \
+            --namespace "${{ inputs.kubernetes_namespace }}" \
+            --timeout=300s
+
+      - name: Show deployment summary
+        run: |
+          kubectl get deploy,po,svc \
+            --namespace "${{ inputs.kubernetes_namespace }}"
+
+      # Keep Discord notifications commented for now.
+      # - name: Discord deploy alert
+      #   if: ${{ always() && env.DISCORD_WEBHOOK != '' }}
+      #   run: |
+      #     message="Formio deploy finished with status ${{ job.status }} in ${GITHUB_REF_NAME}. Cluster: ${{ inputs.eks_cluster_name }}. Link: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+      #     curl -X POST -H "Content-Type: application/json" -d "{\"content\":\"$message\"}" "$DISCORD_WEBHOOK"

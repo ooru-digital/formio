@@ -1,0 +1,58 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: formio
+  namespace: core
+spec:
+  type: ClusterIP
+  selector:
+    app: formio
+  ports:
+    - port: 3001
+      targetPort: 3001
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: formio
+  namespace: core
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: formio
+  template:
+    metadata:
+      labels:
+        app: formio
+    spec:
+      imagePullSecrets:
+        - name: ooru-registry-regcred
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: eks.amazonaws.com/nodegroup
+                    operator: In
+                    values:
+                      - stage-credissuer-spot-core-node
+      containers:
+        - name: formio
+          image: ${BP_IMAGE_URI}
+          ports:
+            - containerPort: 3001
+          envFrom:
+            - configMapRef:
+                name: formio-config
+          stdin: true
+          tty: true
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"

@@ -1,0 +1,61 @@
+name: Staging Deployment
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_to_eks:
+        description: "Deploy to EKS after Docker push"
+        required: false
+        default: false
+        type: boolean
+  # Enable this again when you want automatic staging deployment on every push.
+  # push:
+  #   branches:
+  #     - staging
+
+jobs:
+  trigger-integration-tests:
+    name: Staging Unit Tests
+    uses: ./.github/workflows/integration-tests.yml
+    secrets:
+      discord_webhook: ${{ secrets.DISCORD_STAGING_BUILDS_URL }}
+
+  container_pipeline:
+    name: Staging Container Pipeline
+    needs: [trigger-integration-tests]
+    if: ${{ always() }}
+    uses: ./.github/workflows/container-pipeline.yml
+    with:
+      registry: docker.io
+      image_repository: ${{ vars.STAGING_DOCKERHUB_IMAGE_REPOSITORY }}
+      image_tag_prefix: staging
+      docker_context: .
+      dockerfile: Dockerfile
+      push_image: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    secrets:
+      registry_username: ${{ secrets.DOCKERHUB_USERNAME }}
+      registry_password: ${{ secrets.DOCKERHUB_TOKEN }}
+      discord_webhook: ${{ secrets.DISCORD_STAGING_BUILDS_URL }}
+
+  deploy:
+    name: Staging Deploy To EKS
+    needs: [container_pipeline]
+    if: ${{ needs.container_pipeline.result == 'success' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.deploy_to_eks)) }}
+    uses: ./.github/workflows/deploy-eks.yml
+    with:
+      aws_region: ${{ vars.AWS_REGION }}
+      aws_role_to_assume: ${{ vars.STAGING_GITHUB_ACTIONS_AWS_ROLE_ARN }}
+      eks_cluster_name: ${{ vars.STAGING_EKS_CLUSTER_NAME }}
+      kubernetes_namespace: ${{ vars.STAGING_KUBERNETES_NAMESPACE }}
+      manifest_dir: deploy/eks/staging
+      docker_image: docker.io/${{ vars.STAGING_DOCKERHUB_IMAGE_REPOSITORY }}:${{ needs.container_pipeline.outputs.image_tag }}
+      image_pull_secret_name: ooru-registry-regcred
+      deployment_name: formio
+      container_name: formio
+    secrets:
+      dockerhub_username: ${{ secrets.DOCKERHUB_USERNAME }}
+      dockerhub_token: ${{ secrets.DOCKERHUB_TOKEN }}
+      discord_webhook: ${{ secrets.DISCORD_STAGING_BUILDS_URL }}

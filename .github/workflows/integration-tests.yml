@@ -1,0 +1,64 @@
+name: Formio Tests
+
+on:
+  workflow_call:
+    inputs:
+      node_version:
+        required: false
+        type: string
+        default: "20"
+    secrets:
+      discord_webhook:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Unit Tests
+    runs-on: [self-hosted, linux, x64, aws]
+    # Switch back to GitHub-hosted tests later by commenting the line above and
+    # uncommenting the line below.
+    # runs-on: ubuntu-latest
+
+    services:
+      mongodb:
+        image: mongo:6
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.adminCommand(\"ping\")'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      NODE_CONFIG: '{"mongo":"mongodb://127.0.0.1:27017/formio-ci","mongoSecret":"ci-mongo-secret","jwt":{"secret":"ci-jwt-secret","expireTime":240},"host":"localhost:3001","domain":"http://localhost:3001","protocol":"http","allowedOrigins":["*"]}'
+      ROOT_EMAIL: admin@example.com
+      ROOT_PASSWORD: CHANGEME
+      TEST_SUITE: "1"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: yarn
+          cache-dependency-path: yarn.lock
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Run tests
+        run: yarn test
+
+      # Keep Discord notifications commented for now.
+      # - name: Discord test alert
+      #   if: ${{ always() && secrets.discord_webhook != '' }}
+      #   run: |
+      #     message="Formio unit tests finished with status ${{ job.status }} for ${GITHUB_REF_NAME}. Link: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+      #     curl -X POST -H "Content-Type: application/json" -d "{\"content\":\"$message\"}" "${{ secrets.discord_webhook }}"

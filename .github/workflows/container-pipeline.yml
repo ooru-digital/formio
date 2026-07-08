@@ -1,0 +1,143 @@
+name: Container Pipeline
+
+on:
+  workflow_call:
+    inputs:
+      registry:
+        required: true
+        type: string
+      image_repository:
+        required: true
+        type: string
+      image_tag_prefix:
+        required: false
+        type: string
+        default: ""
+      docker_context:
+        required: false
+        type: string
+        default: .
+      dockerfile:
+        required: false
+        type: string
+        default: Dockerfile
+      push_image:
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      registry_username:
+        required: false
+      registry_password:
+        required: false
+      discord_webhook:
+        required: false
+    outputs:
+      image_tag:
+        value: ${{ jobs.container_pipeline.outputs.image_tag }}
+      image_ref:
+        value: ${{ jobs.container_pipeline.outputs.image_ref }}
+      image_latest_ref:
+        value: ${{ jobs.container_pipeline.outputs.image_latest_ref }}
+
+permissions:
+  contents: read
+
+jobs:
+  container_pipeline:
+    name: Container Pipeline
+    runs-on: [self-hosted, linux, x64, aws]
+    # Switch back to GitHub-hosted builds later by commenting the line above and
+    # uncommenting the line below.
+    # runs-on: ubuntu-latest
+
+    outputs:
+      image_tag: ${{ steps.image_meta.outputs.image_tag }}
+      image_ref: ${{ steps.image_meta.outputs.image_ref }}
+      image_latest_ref: ${{ steps.image_meta.outputs.image_latest_ref }}
+
+    env:
+      DISCORD_WEBHOOK: ${{ secrets.discord_webhook }}
+      LOCAL_IMAGE_NAME: formio-ci
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set image metadata
+        id: image_meta
+        run: |
+          SHORT_SHA="${GITHUB_SHA::12}"
+
+          if [ -n "${{ inputs.image_tag_prefix }}" ]; then
+            IMAGE_TAG="${{ inputs.image_tag_prefix }}-${SHORT_SHA}"
+            IMAGE_LATEST_TAG="${{ inputs.image_tag_prefix }}-latest"
+          else
+            IMAGE_TAG="${SHORT_SHA}"
+            IMAGE_LATEST_TAG="latest"
+          fi
+
+          IMAGE_REF="${{ inputs.registry }}/${{ inputs.image_repository }}:${IMAGE_TAG}"
+          IMAGE_LATEST_REF="${{ inputs.registry }}/${{ inputs.image_repository }}:${IMAGE_LATEST_TAG}"
+
+          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+          echo "image_ref=$IMAGE_REF" >> "$GITHUB_OUTPUT"
+          echo "image_latest_ref=$IMAGE_LATEST_REF" >> "$GITHUB_OUTPUT"
+
+      - name: Build image
+        run: |
+          docker build \
+            -f "${{ inputs.dockerfile }}" \
+            -t "${LOCAL_IMAGE_NAME}:${{ steps.image_meta.outputs.image_tag }}" \
+            -t "${{ steps.image_meta.outputs.image_ref }}" \
+            -t "${{ steps.image_meta.outputs.image_latest_ref }}" \
+            "${{ inputs.docker_context }}"
+
+      - name: Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.LOCAL_IMAGE_NAME }}:${{ steps.image_meta.outputs.image_tag }}
+          format: table
+          exit-code: "0"
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+          scanners: vuln
+
+      - name: Trivy secret scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.LOCAL_IMAGE_NAME }}:${{ steps.image_meta.outputs.image_tag }}
+          format: table
+          exit-code: "1"
+          severity: CRITICAL,HIGH
+          scanners: secret
+
+      - name: Registry login
+        if: ${{ inputs.push_image }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ inputs.registry }}
+          username: ${{ secrets.registry_username }}
+          password: ${{ secrets.registry_password }}
+
+      - name: Push image
+        if: ${{ inputs.push_image }}
+        run: |
+          docker push "${{ steps.image_meta.outputs.image_ref }}"
+          docker push "${{ steps.image_meta.outputs.image_latest_ref }}"
+
+      - name: Cleanup local images
+        if: always()
+        run: |
+          docker image rm "${LOCAL_IMAGE_NAME}:${{ steps.image_meta.outputs.image_tag }}" || true
+          docker image rm "${{ steps.image_meta.outputs.image_ref }}" || true
+          docker image rm "${{ steps.image_meta.outputs.image_latest_ref }}" || true
+          docker image prune -af || true
+          docker builder prune -af || true
+
+      # Keep Discord notifications commented for now.
+      # - name: Discord container alert
+      #   if: ${{ always() && env.DISCORD_WEBHOOK != '' }}
+      #   run: |
+      #     message="Formio container pipeline finished with status ${{ job.status }}. Image: ${{ steps.image_meta.outputs.image_ref }}. Link: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+      #     curl -X POST -H "Content-Type: application/json" -d "{\"content\":\"$message\"}" "$DISCORD_WEBHOOK"
