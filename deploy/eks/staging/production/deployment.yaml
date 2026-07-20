@@ -1,0 +1,141 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: formio
+  namespace: core
+spec:
+  type: ClusterIP
+  selector:
+    app: formio
+  ports:
+    - port: 3001
+      targetPort: 3001
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: formio
+  namespace: core
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: formio
+  template:
+    metadata:
+      labels:
+        app: formio
+    spec:
+      imagePullSecrets:
+        - name: ooru-registry-regcred
+
+      tolerations:
+        - key: "dedicated"
+          operator: "Equal"
+          value: "core"
+          effect: "NoSchedule"
+
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node-role
+                    operator: In
+                    values:
+                      - core
+
+      containers:
+        - name: formio
+          image: ooruio/formio-prod:9-2026-07-13-210943
+          imagePullPolicy: Always
+
+          ports:
+            - containerPort: 3001
+
+          envFrom:
+            - configMapRef:
+                name: formio-config
+
+          stdin: true
+          tty: true
+
+          startupProbe:
+            httpGet:
+              path: /
+              port: 3001
+            failureThreshold: 30
+            periodSeconds: 10
+
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3001
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3001
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: formio-hpa
+  namespace: core
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: formio
+
+  minReplicas: 1
+  maxReplicas: 2
+
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 15
+
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 15
+
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
