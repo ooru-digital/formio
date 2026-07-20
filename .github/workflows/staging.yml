@@ -30,7 +30,7 @@ jobs:
     uses: ./.github/workflows/container-pipeline.yml
     with:
       registry: docker.io
-      image_repository: ${{ vars.STAGING_DOCKERHUB_IMAGE_REPOSITORY }}
+      image_repository: ${{ vars.DOCKERHUB_STAGING_IMAGE_REPOSITORY }}
       image_tag_prefix: staging
       docker_context: .
       dockerfile: Dockerfile
@@ -51,7 +51,7 @@ jobs:
       eks_cluster_name: ${{ vars.STAGING_EKS_CLUSTER_NAME }}
       kubernetes_namespace: ${{ vars.STAGING_KUBERNETES_NAMESPACE }}
       manifest_dir: deploy/eks/staging
-      docker_image: docker.io/${{ vars.STAGING_DOCKERHUB_IMAGE_REPOSITORY }}:${{ needs.container_pipeline.outputs.image_tag }}
+      docker_image: docker.io/${{ vars.DOCKERHUB_STAGING_IMAGE_REPOSITORY }}:${{ needs.container_pipeline.outputs.image_tag }}
       image_pull_secret_name: ooru-registry-regcred
       deployment_name: formio
       container_name: formio
