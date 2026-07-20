@@ -12,9 +12,9 @@ on:
         default: false
         type: boolean
   # Enable this again when you want automatic staging deployment on every push.
-  # push:
-  #   branches:
-  #     - staging
+  push:
+    branches:
+     - staging
 
 jobs:
   trigger-integration-tests:

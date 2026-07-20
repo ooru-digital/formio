@@ -12,9 +12,9 @@ on:
         default: false
         type: boolean
   # Enable this again when you want automatic production deployment on every push.
-  # push:
-  #   branches:
-  #     - main
+  push:
+    branches:
+      - main
 
 jobs:
   trigger-integration-tests:
