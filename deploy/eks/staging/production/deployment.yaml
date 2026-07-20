@@ -41,10 +41,10 @@ spec:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
               - matchExpressions:
-                  - key: node-role
+                  - key: eks.amazonaws.com/nodegroup
                     operator: In
                     values:
-                      - core
+                      - stage-credissuer-spot-core-node
 
       containers:
         - name: formio
