@@ -47,8 +47,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node_version }}
-          cache: yarn
-          cache-dependency-path: yarn.lock
+
+      - name: Enable Corepack
+        run: |
+          corepack enable
+          corepack prepare yarn@stable --activate
+          yarn --version
 
       - name: Install dependencies
         run: yarn install --frozen-lockfile
