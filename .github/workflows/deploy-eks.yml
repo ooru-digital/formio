@@ -29,30 +29,26 @@ on:
       docker_image:
         required: true
         type: string
-      image_pull_secret_name:
+      formio_deployment_name:
         required: false
         type: string
-        default: ooru-registry-regcred
-      api_deployment_name:
+        default: formio
+      formio_container_name:
         required: false
         type: string
-        default: credflow-api
-      api_container_name:
-        required: false
-        type: string
-        default: api
-      celery_enabled:
-        required: false
-        type: boolean
-        default: false
-      celery_deployment_name:
-        required: false
-        type: string
-        default: credflow-celery
-      celery_container_name:
-        required: false
-        type: string
-        default: celery
+        default: formio
+      # celery_enabled:
+      #   required: false
+      #   type: boolean
+      #   default: false
+      # celery_deployment_name:
+      #   required: false
+      #   type: string
+      #   default: credflow-celery
+      # celery_container_name:
+      #   required: false
+      #   type: string
+      #   default: celery
       unit_test_status:
         required: true
         type: string
@@ -153,31 +149,31 @@ jobs:
             fi
           done
 
-      - name: Update API image
+      - name: Update formio image
         run: |
-          kubectl set image deployment/${{ inputs.api_deployment_name }} \
-            ${{ inputs.api_container_name }}=${{ inputs.docker_image }} \
+          kubectl set image deployment/${{ inputs.formio_deployment_name }} \
+            ${{ inputs.formio_container_name }}=${{ inputs.docker_image }} \
             --namespace "${{ inputs.kubernetes_namespace }}"
 
-      - name: Update Celery image
-        if: ${{ inputs.celery_enabled }}
-        run: |
-          kubectl set image deployment/${{ inputs.celery_deployment_name }} \
-            ${{ inputs.celery_container_name }}=${{ inputs.docker_image }} \
-            --namespace "${{ inputs.kubernetes_namespace }}"
+      # - name: Update Celery image
+      #   if: ${{ inputs.celery_enabled }}
+      #   run: |
+      #     kubectl set image deployment/${{ inputs.celery_deployment_name }} \
+      #       ${{ inputs.celery_container_name }}=${{ inputs.docker_image }} \
+      #       --namespace "${{ inputs.kubernetes_namespace }}"
 
-      - name: Wait for API rollout
+      - name: Wait for formio rollout
         run: |
-          kubectl rollout status deployment/${{ inputs.api_deployment_name }} \
+          kubectl rollout status deployment/${{ inputs.formio_deployment_name }} \
             --namespace "${{ inputs.kubernetes_namespace }}" \
             --timeout=300s
 
-      - name: Wait for Celery rollout
-        if: ${{ inputs.celery_enabled }}
-        run: |
-          kubectl rollout status deployment/${{ inputs.celery_deployment_name }} \
-            --namespace "${{ inputs.kubernetes_namespace }}" \
-            --timeout=300s
+      # - name: Wait for Celery rollout
+      #   if: ${{ inputs.celery_enabled }}
+      #   run: |
+      #     kubectl rollout status deployment/${{ inputs.celery_deployment_name }} \
+      #       --namespace "${{ inputs.kubernetes_namespace }}" \
+      #       --timeout=300s
 
       - name: Download Unit Test Report
         if: always()
