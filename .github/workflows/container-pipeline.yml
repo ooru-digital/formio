@@ -14,10 +14,10 @@ on:
         required: false
         type: string
         default: ""
-      django_env:
-        required: false
-        type: string
-        default: STAGING
+      # django_env:
+      #   required: false
+      #   type: string
+        # default: STAGING
       docker_context:
         required: false
         type: string
@@ -231,7 +231,6 @@ jobs:
         id: build_image
         run: |
           docker build \
-          --build-arg DJANGO_ENV=${{ inputs.django_env }} \
           -f "${{ inputs.dockerfile }}" \
           -t "${LOCAL_IMAGE_NAME}:${{ steps.image_meta.outputs.image_tag }}" \
           -t "${{ steps.image_meta.outputs.image_ref }}" \
