@@ -1,0 +1,286 @@
+name: Kubernetes Rollback
+
+permissions:
+  contents: read
+  id-token: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_environment:
+        description: "Environment"
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+
+      rollback_type:
+        description: "Rollback method"
+        required: true
+        type: choice
+        options:
+          - revision
+          - image
+
+      revision:
+        description: "Kubernetes revision number (required for revision rollback)"
+        required: false
+        type: string
+
+      image_tag:
+        description: "Docker image tag (required for image rollback)"
+        required: false
+        type: string
+
+
+jobs:
+
+  rollback:
+    name: Kubernetes Rollback
+    runs-on: [self-hosted, linux, x64, aws]
+
+    steps:
+
+      # --------------------------------------------------
+      # 1. Validate inputs
+      # --------------------------------------------------
+
+      - name: Validate rollback input
+        run: |
+          if [ "${{ inputs.rollback_type }}" = "revision" ]; then
+            if [ -z "${{ inputs.revision }}" ]; then
+              echo "::error::Revision is required for revision rollback."
+              exit 1
+            fi
+          fi
+
+          if [ "${{ inputs.rollback_type }}" = "image" ]; then
+            if [ -z "${{ inputs.image_tag }}" ]; then
+              echo "::error::Image tag is required for image rollback."
+              exit 1
+            fi
+          fi
+
+
+      # --------------------------------------------------
+      # 2. Configure environment
+      # --------------------------------------------------
+
+      - name: Set environment variables
+        id: env
+        run: |
+
+          if [ "${{ inputs.target_environment }}" = "staging" ]; then
+
+            echo "AWS_REGION=${{ vars.AWS_REGION }}" >> "$GITHUB_OUTPUT"
+            echo "AWS_ROLE=${{ vars.STAGING_GITHUB_ACTIONS_AWS_ROLE_ARN }}" >> "$GITHUB_OUTPUT"
+            echo "EKS_CLUSTER=${{ vars.STAGING_EKS_CLUSTER_NAME }}" >> "$GITHUB_OUTPUT"
+            echo "NAMESPACE=${{ vars.STAGING_KUBERNETES_NAMESPACE }}" >> "$GITHUB_OUTPUT"
+            echo "IMAGE_REPOSITORY=${{ vars.DOCKERHUB_STAGING_IMAGE_REPOSITORY }}" >> "$GITHUB_OUTPUT"
+
+          else
+
+            echo "AWS_REGION=${{ vars.AWS_REGION }}" >> "$GITHUB_OUTPUT"
+            echo "AWS_ROLE=${{ vars.PRODUCTION_GITHUB_ACTIONS_AWS_ROLE_ARN }}" >> "$GITHUB_OUTPUT"
+            echo "EKS_CLUSTER=${{ vars.PRODUCTION_EKS_CLUSTER_NAME }}" >> "$GITHUB_OUTPUT"
+            echo "NAMESPACE=${{ vars.PRODUCTION_KUBERNETES_NAMESPACE }}" >> "$GITHUB_OUTPUT"
+            echo "IMAGE_REPOSITORY=${{ vars.DOCKERHUB_PRODUCTION_IMAGE_REPOSITORY }}" >> "$GITHUB_OUTPUT"
+
+          fi
+
+
+      # --------------------------------------------------
+      # 3. AWS credentials
+      # --------------------------------------------------
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ steps.env.outputs.AWS_REGION }}
+          role-to-assume: ${{ steps.env.outputs.AWS_ROLE }}
+          role-chaining: true
+
+
+      # --------------------------------------------------
+      # 4. Install kubectl
+      # --------------------------------------------------
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: latest
+
+
+      # --------------------------------------------------
+      # 5. Configure kubeconfig
+      # --------------------------------------------------
+
+      - name: Configure kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --name "${{ steps.env.outputs.EKS_CLUSTER }}" \
+            --region "${{ steps.env.outputs.AWS_REGION }}"
+
+
+      # --------------------------------------------------
+      # 6. Verify cluster
+      # --------------------------------------------------
+
+      - name: Verify EKS access
+        run: |
+          kubectl config current-context
+          kubectl get nodes
+
+          echo ""
+          echo "Environment : ${{ inputs.target_environment }}"
+          echo "Cluster     : ${{ steps.env.outputs.EKS_CLUSTER }}"
+          echo "Namespace   : ${{ steps.env.outputs.NAMESPACE }}"
+
+
+      # --------------------------------------------------
+      # 7. Show current deployment
+      # --------------------------------------------------
+
+      - name: Show current deployment
+        run: |
+
+          echo "Current deployment image:"
+
+          kubectl get deployment formio \
+            -n "${{ steps.env.outputs.NAMESPACE }}" \
+            -o jsonpath='{.spec.template.spec.containers[0].image}'
+
+          echo ""
+
+          echo "Rollout history:"
+
+          kubectl rollout history deployment/formio \
+            -n "${{ steps.env.outputs.NAMESPACE }}"
+
+
+      # ==================================================
+      # 8. Kubernetes Native Revision Rollback
+      # ==================================================
+
+      - name: Show selected revision
+        if: ${{ inputs.rollback_type == 'revision' }}
+        run: |
+
+          echo "=========================================="
+          echo "KUBERNETES REVISION ROLLBACK"
+          echo "=========================================="
+
+          echo "Deployment : formio"
+          echo "Revision   : ${{ inputs.revision }}"
+          echo "Namespace  : ${{ steps.env.outputs.NAMESPACE }}"
+
+          echo ""
+
+          kubectl rollout history deployment/formio \
+            --revision="${{ inputs.revision }}" \
+            -n "${{ steps.env.outputs.NAMESPACE }}"
+
+
+      - name: Rollback to Kubernetes revision
+        if: ${{ inputs.rollback_type == 'revision' }}
+        run: |
+
+          echo "Rolling back formio to revision ${{ inputs.revision }}"
+
+          kubectl rollout undo deployment/formio \
+            --to-revision="${{ inputs.revision }}" \
+            -n "${{ steps.env.outputs.NAMESPACE }}"
+
+
+      # ==================================================
+      # 9. Image Tag Rollback
+      # ==================================================
+
+      - name: Verify image tag
+        if: ${{ inputs.rollback_type == 'image' }}
+        run: |
+
+          echo "Checking image:"
+
+          IMAGE="docker.io/${{ steps.env.outputs.IMAGE_REPOSITORY }}:${{ inputs.image_tag }}"
+
+          echo "$IMAGE"
+
+          docker manifest inspect "$IMAGE" > /dev/null 2>&1 || {
+            echo "::error::Image tag does not exist: $IMAGE"
+            exit 1
+          }
+
+          echo "Image exists."
+
+
+      - name: Rollback to image tag
+        if: ${{ inputs.rollback_type == 'image' }}
+        run: |
+
+          IMAGE="docker.io/${{ steps.env.outputs.IMAGE_REPOSITORY }}:${{ inputs.image_tag }}"
+
+          echo "=========================================="
+          echo "IMAGE TAG ROLLBACK"
+          echo "=========================================="
+
+          echo "Deployment : formio"
+          echo "Image      : $IMAGE"
+          echo "Namespace  : ${{ steps.env.outputs.NAMESPACE }}"
+
+          kubectl set image deployment/formio \
+            formio="$IMAGE" \
+            -n "${{ steps.env.outputs.NAMESPACE }}"
+
+
+      # --------------------------------------------------
+      # 10. Wait for rollout
+      # --------------------------------------------------
+
+      - name: Wait for rollback
+        run: |
+
+          kubectl rollout status deployment/formio \
+            -n "${{ steps.env.outputs.NAMESPACE }}" \
+            --timeout=300s
+
+
+      # --------------------------------------------------
+      # 11. Verify final state
+      # --------------------------------------------------
+
+      - name: Verify rollback
+        run: |
+
+          echo "=========================================="
+          echo "ROLLBACK RESULT"
+          echo "=========================================="
+
+          echo "Deployment:"
+          kubectl get deployment formio \
+            -n "${{ steps.env.outputs.NAMESPACE }}"
+
+          echo ""
+
+          echo "Pods:"
+          kubectl get pods \
+            -n "${{ steps.env.outputs.NAMESPACE }}" \
+            -l app=formio
+
+          echo ""
+
+          echo "Current image:"
+
+          kubectl get deployment formio \
+            -n "${{ steps.env.outputs.NAMESPACE }}" \
+            -o jsonpath='{.spec.template.spec.containers[0].image}'
+
+          echo ""
+
+          echo ""
+
+          echo "Rollout history:"
+
+          kubectl rollout history deployment/formio \
+            -n "${{ steps.env.outputs.NAMESPACE }}"
