@@ -139,7 +139,7 @@ jobs:
       - name: Apply Kubernetes manifests one by one
         run: |
           files=(
-            "${{ inputs.manifest_dir }}/deployment-aws.yaml"
+            "${{ inputs.manifest_dir }}/deployment.yaml"
           )
 
           for file in "${files[@]}"; do
