@@ -41,7 +41,7 @@ spec:
                       - stage-credissuer-spot-core-node
       containers:
         - name: formio
-          image: ${BP_IMAGE_URI}
+          image: __IMAGE_PLACEHOLDER__
           ports:
             - containerPort: 3001
           envFrom:
