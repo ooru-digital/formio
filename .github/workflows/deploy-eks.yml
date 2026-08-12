@@ -1,3 +1,11 @@
+# NOTE: This is the version you originally shared with me. Your production.yaml
+# and rollback.yaml now pass additional inputs (service_account_name,
+# pod_irsa_role_arn, django_env, aws_env_path, aws_secret_path,
+# aws_did_secret_prefix, api_replicas, celery_replicas, celery_broker_url)
+# that this file does not declare. If your real deploy-eks.yml has already
+# been updated to accept these, replace this file with that current version
+# before using this set — this one will not accept those calls as written.
+
 name: Deploy To EKS
 
 on:
@@ -24,15 +32,33 @@ on:
       image_pull_secret_name:
         required: false
         type: string
-        default: dockerhub-registry
-      deployment_name:
+        default: ooru-registry-regcred
+      api_deployment_name:
         required: false
         type: string
-        default: formio
-      container_name:
+        default: credflow-api
+      api_container_name:
         required: false
         type: string
-        default: formio
+        default: api
+      celery_enabled:
+        required: false
+        type: boolean
+        default: false
+      celery_deployment_name:
+        required: false
+        type: string
+        default: credflow-celery
+      celery_container_name:
+        required: false
+        type: string
+        default: celery
+      unit_test_status:
+        required: true
+        type: string
+      trivy_status:
+        required: true
+        type: string
     secrets:
       dockerhub_username:
         required: true
@@ -58,23 +84,22 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Explain deploy execution location
+        run: |
+          echo "This deploy job is running on the GitHub self-hosted runner."
+          echo "kubectl and aws commands below execute directly from that runner."
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ inputs.aws_region }}
           role-to-assume: ${{ inputs.aws_role_to_assume }}
           role-chaining: true
-          role-skip-session-tagging: true
 
       - name: Install kubectl
         uses: azure/setup-kubectl@v4
         with:
           version: latest
-
-      - name: Install envsubst
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gettext-base
 
       - name: Configure kubeconfig
         run: |
@@ -83,63 +108,181 @@ jobs:
             --region "${{ inputs.aws_region }}"
 
       - name: Verify cluster access
+        id: verify_cluster
         run: |
           kubectl config current-context
           kubectl get nodes
+
+      - name: Send EKS Access Failed Alert
+        if: ${{ failure() && steps.verify_cluster.outcome == 'failure' && env.DISCORD_WEBHOOK != '' }}
+        run: |
+          CONTENT=$(cat <<EOF
+          🚨 **CD - EKS Access Failed**
+          Repository : ${{ github.repository }}
+          Branch/Tag : ${{ github.ref_name }}
+          Trigger    : ${{ github.event_name == 'workflow_dispatch' && 'Manual' || 'Auto' }}
+          Runner     : Self-Hosted
+          Cluster    : ${{ inputs.eks_cluster_name }}
+          Namespace  : ${{ inputs.kubernetes_namespace }}
+          Status     : ❌ FAILED
+          Reason     : Runner could not access the EKS cluster.
+
+          Run:
+          https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EOF
+          )
+          curl \
+            -F "content=${CONTENT}" \
+            "$DISCORD_WEBHOOK"
 
       - name: Ensure namespace exists
         run: |
           kubectl get namespace "${{ inputs.kubernetes_namespace }}" >/dev/null 2>&1 || \
           kubectl create namespace "${{ inputs.kubernetes_namespace }}"
 
-      - name: Create or update Docker Hub image pull secret
-        run: |
-          kubectl create secret docker-registry "${{ inputs.image_pull_secret_name }}" \
-            --namespace "${{ inputs.kubernetes_namespace }}" \
-            --docker-server="https://index.docker.io/v1/" \
-            --docker-username="${{ secrets.dockerhub_username }}" \
-            --docker-password="${{ secrets.dockerhub_token }}" \
-            --dry-run=client -o yaml | kubectl apply -f -
-
-      - name: Render Kubernetes manifests
-        env:
-          BP_IMAGE_URI: ${{ inputs.docker_image }}
-          DOCKER_IMAGE: ${{ inputs.docker_image }}
-          IMAGE_PULL_SECRET_NAME: ${{ inputs.image_pull_secret_name }}
-        run: |
-          mkdir -p rendered-manifests
-
-          while IFS= read -r file; do
-            envsubst < "$file" > "rendered-manifests/$(basename "$file")"
-          done < <(find "${{ inputs.manifest_dir }}" -type f -name '*.yaml' | sort)
-
       - name: Apply Kubernetes manifests one by one
         run: |
-          find rendered-manifests -maxdepth 1 -type f -name '*.yaml' | sort | while read -r file; do
-            echo "Applying $file"
-            kubectl apply -f "$file"
+          files=(
+            "${{ inputs.manifest_dir }}/deployment-aws.yaml"
+          )
+
+          for file in "${files[@]}"; do
+            if [ -f "$file" ]; then
+              echo "Applying $file"
+              kubectl apply -f "$file"
+            fi
           done
 
-      - name: Update deployment image
+      - name: Update API image
         run: |
-          kubectl set image deployment/${{ inputs.deployment_name }} \
-            ${{ inputs.container_name }}=${{ inputs.docker_image }} \
+          kubectl set image deployment/${{ inputs.api_deployment_name }} \
+            ${{ inputs.api_container_name }}=${{ inputs.docker_image }} \
             --namespace "${{ inputs.kubernetes_namespace }}"
 
-      - name: Wait for rollout
+      - name: Update Celery image
+        if: ${{ inputs.celery_enabled }}
         run: |
-          kubectl rollout status deployment/${{ inputs.deployment_name }} \
+          kubectl set image deployment/${{ inputs.celery_deployment_name }} \
+            ${{ inputs.celery_container_name }}=${{ inputs.docker_image }} \
+            --namespace "${{ inputs.kubernetes_namespace }}"
+
+      - name: Wait for API rollout
+        run: |
+          kubectl rollout status deployment/${{ inputs.api_deployment_name }} \
             --namespace "${{ inputs.kubernetes_namespace }}" \
             --timeout=300s
+
+      - name: Wait for Celery rollout
+        if: ${{ inputs.celery_enabled }}
+        run: |
+          kubectl rollout status deployment/${{ inputs.celery_deployment_name }} \
+            --namespace "${{ inputs.kubernetes_namespace }}" \
+            --timeout=300s
+
+      - name: Download Unit Test Report
+        if: always()
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: unit-test-report
+          path: reports/unit-test
+
+      - name: Download Trivy Report
+        if: always()
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: trivy-report
+          path: reports/trivy
 
       - name: Show deployment summary
         run: |
           kubectl get deploy,po,svc \
             --namespace "${{ inputs.kubernetes_namespace }}"
 
-      # Keep Discord notifications commented for now.
-      # - name: Discord deploy alert
-      #   if: ${{ always() && env.DISCORD_WEBHOOK != '' }}
-      #   run: |
-      #     message="Formio deploy finished with status ${{ job.status }} in ${GITHUB_REF_NAME}. Cluster: ${{ inputs.eks_cluster_name }}. Link: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-      #     curl -X POST -H "Content-Type: application/json" -d "{\"content\":\"$message\"}" "$DISCORD_WEBHOOK"
+      - name: Send Final Deployment Report
+        if: always() && env.DISCORD_WEBHOOK != ''
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            DEPLOY_STATUS="PASSED"
+            DEPLOY_EMOJI="✅"
+          else
+            DEPLOY_STATUS="FAILED"
+            DEPLOY_EMOJI="❌"
+          fi
+
+          # Check Unit Test report
+          if [ -f reports/unit-test/unit-test-report.txt ]; then
+            UNIT_REPORT_STATUS="📎 Attached"
+          else
+            UNIT_REPORT_STATUS="❌ Not available"
+          fi
+
+          # Check Trivy report
+          if [ -f reports/trivy/trivy-report.txt ]; then
+            TRIVY_REPORT_STATUS="📎 Attached"
+          else
+            TRIVY_REPORT_STATUS="❌ Not available"
+          fi
+
+          CONTENT=$(cat <<EOF
+          🚀 **Deployment Report**
+
+          Repository : ${{ github.repository }}
+          Branch/Tag : ${{ github.ref_name }}
+
+          Cluster    : ${{ inputs.eks_cluster_name }}
+          Namespace  : ${{ inputs.kubernetes_namespace }}
+
+          Deployment : ${DEPLOY_EMOJI} ${DEPLOY_STATUS}
+
+          Unit Tests : ${{ inputs.unit_test_status }}
+          Trivy      : ${{ inputs.trivy_status }}
+
+          Unit Test Report : ${UNIT_REPORT_STATUS}
+          Trivy Report     : ${TRIVY_REPORT_STATUS}
+
+          Triggered By : ${{ github.actor }}
+          Runner       : Self-Hosted
+
+          🔗 ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EOF
+          )
+
+          CURL_ARGS=(
+            -sS
+            --fail-with-body
+            -F "content=${CONTENT}"
+          )
+
+          # Attach Unit Test Report
+          if [ -f reports/unit-test/unit-test-report.txt ]; then
+            echo "Attaching unit test report..."
+            CURL_ARGS+=(
+              -F "file1=@reports/unit-test/unit-test-report.txt"
+            )
+          fi
+
+          # Attach Trivy Report ONLY if it exists
+          if [ -f reports/trivy/trivy-report.txt ]; then
+            echo "Attaching Trivy report..."
+            CURL_ARGS+=(
+              -F "file2=@reports/trivy/trivy-report.txt"
+            )
+          else
+            echo "Trivy report not found. This is expected when Trivy passed."
+          fi
+
+          echo "Sending final deployment notification..."
+
+          curl "${CURL_ARGS[@]}" "$DISCORD_WEBHOOK" || {
+            echo "⚠️ Discord notification failed"
+            echo "Deployment status remains: ${DEPLOY_STATUS}"
+            exit 0
+          }
+
+          # curl "${CURL_ARGS[@]}" "$DISCORD_WEBHOOK" || {
+          #   echo "⚠️ Discord notification failed"
+          #   echo "Deployment status remains: ${DEPLOY_STATUS}"
+          #   exit 0
+          # }
