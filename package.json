@@ -16,6 +16,9 @@
   },
   "schema": "3.1.4",
   "templateVersion": "2.0.0",
+  "resolutions": {
+    "inputmask": "5.0.8"
+  },
   "dependencies": {
     "@formio/core": "2.0.0-dev.71.013793a",
     "@formio/node-fetch-http-proxy": "^1.1.0",
