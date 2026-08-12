@@ -4,9 +4,9 @@ permissions:
   contents: read
 
 on:
-  # push:
-  #   branches:
-  #     - "**"
+  push:
+    branches:
+      - "**"
 
 jobs:
   alert:
