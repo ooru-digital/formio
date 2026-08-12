@@ -1,0 +1,165 @@
+name: Rollback EKS Deployment
+
+permissions:
+  contents: read
+  id-token: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_environment:
+        description: "Environment to roll back"
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      image_tag:
+        description: "Existing Docker Hub image tag to deploy, for example v2.0.1-RC2 or v2.0.1"
+        required: true
+        type: string
+
+jobs:
+  verify_tag:
+    name: Verify Tag Exists
+    runs-on: [self-hosted, linux, x64, aws]
+    outputs:
+      exists: ${{ steps.check.outputs.exists }}
+      registry_repo: ${{ steps.check.outputs.registry_repo }}
+    steps:
+      - name: Registry login
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Check the tag actually exists in the target registry
+        id: check
+        run: |
+          if [ "${{ inputs.target_environment }}" = "staging" ]; then
+            REPO="${{ vars.DOCKERHUB_STAGING_IMAGE_REPOSITORY }}"
+          else
+            REPO="${{ vars.DOCKERHUB_PRODUCTION_IMAGE_REPOSITORY }}"
+          fi
+
+          echo "registry_repo=$REPO" >> "$GITHUB_OUTPUT"
+
+          if docker manifest inspect "docker.io/${REPO}:${{ inputs.image_tag }}" > /dev/null 2>&1; then
+            echo "Tag '${{ inputs.image_tag }}' found in docker.io/${REPO}."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Tag '${{ inputs.image_tag }}' was not found in docker.io/${REPO}. Rollback aborted, nothing deployed."
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+  rollback_staging:
+    name: Rollback Staging
+    needs: [verify_tag]
+    if: ${{ inputs.target_environment == 'staging' && needs.verify_tag.outputs.exists == 'true' }}
+    uses: ./.github/workflows/deploy-eks.yml
+    with:
+      aws_region: ${{ vars.AWS_REGION }}
+      aws_role_to_assume: ${{ vars.STAGING_GITHUB_ACTIONS_AWS_ROLE_ARN }}
+      eks_cluster_name: ${{ vars.STAGING_EKS_CLUSTER_NAME }}
+      kubernetes_namespace: ${{ vars.STAGING_KUBERNETES_NAMESPACE }}
+      manifest_dir: deploy/eks/staging
+      docker_image: docker.io/${{ vars.DOCKERHUB_STAGING_IMAGE_REPOSITORY }}:${{ inputs.image_tag }}
+      service_account_name: ${{ vars.STAGING_K8S_SERVICE_ACCOUNT_NAME }}
+      image_pull_secret_name: dockerhub-registry
+      pod_irsa_role_arn: ${{ vars.STAGING_EKS_APP_IRSA_ROLE_ARN }}
+      django_env: STAGING
+      aws_env_path: ${{ vars.STAGING_AWS_ENV_PATH }}
+      aws_secret_path: ${{ vars.STAGING_AWS_SECRET_PATH }}
+      aws_did_secret_prefix: ${{ vars.STAGING_AWS_DID_SECRET_PREFIX }}
+      api_replicas: 2
+      celery_replicas: 3
+      celery_broker_url: ${{ vars.STAGING_CELERY_BROKER_URL }}
+    secrets:
+      dockerhub_username: ${{ secrets.DOCKERHUB_USERNAME }}
+      dockerhub_token: ${{ secrets.DOCKERHUB_TOKEN }}
+
+  rollback_production:
+    name: Rollback Production
+    needs: [verify_tag]
+    if: ${{ inputs.target_environment == 'production' && needs.verify_tag.outputs.exists == 'true' }}
+    uses: ./.github/workflows/deploy-eks.yml
+    with:
+      aws_region: ${{ vars.AWS_REGION }}
+      aws_role_to_assume: ${{ vars.PRODUCTION_GITHUB_ACTIONS_AWS_ROLE_ARN }}
+      eks_cluster_name: ${{ vars.PRODUCTION_EKS_CLUSTER_NAME }}
+      kubernetes_namespace: ${{ vars.PRODUCTION_KUBERNETES_NAMESPACE }}
+      manifest_dir: deploy/eks/staging
+      docker_image: docker.io/${{ vars.DOCKERHUB_PRODUCTION_IMAGE_REPOSITORY }}:${{ inputs.image_tag }}
+      service_account_name: ${{ vars.PRODUCTION_K8S_SERVICE_ACCOUNT_NAME }}
+      image_pull_secret_name: dockerhub-registry
+      pod_irsa_role_arn: ${{ vars.PRODUCTION_EKS_APP_IRSA_ROLE_ARN }}
+      django_env: PROD
+      aws_env_path: ${{ vars.PRODUCTION_AWS_ENV_PATH }}
+      aws_secret_path: ${{ vars.PRODUCTION_AWS_SECRET_PATH }}
+      aws_did_secret_prefix: ${{ vars.PRODUCTION_AWS_DID_SECRET_PREFIX }}
+      api_replicas: 2
+      celery_replicas: 3
+      celery_broker_url: ${{ vars.PRODUCTION_CELERY_BROKER_URL }}
+    secrets:
+      dockerhub_username: ${{ secrets.DOCKERHUB_USERNAME }}
+      dockerhub_token: ${{ secrets.DOCKERHUB_TOKEN }}
+
+  notify:
+    name: Rollback Result Notification
+    needs: [verify_tag, rollback_staging, rollback_production]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    env:
+      DISCORD_WEBHOOK: ${{ inputs.target_environment == 'staging' && secrets.DISCORD_STAGING_BUILDS_URL || secrets.DISCORD_PRODUCTION_BUILDS_URL }}
+    steps:
+      - name: Determine outcome and send single Discord alert
+        if: env.DISCORD_WEBHOOK != ''
+        run: |
+          FAILED_STAGE=""
+          REASON=""
+
+          if [ "${{ needs.verify_tag.result }}" = "failure" ]; then
+            FAILED_STAGE="Verify Tag Exists"
+            REASON="Tag '${{ inputs.image_tag }}' was not found in the ${{ inputs.target_environment }} registry."
+          elif [ "${{ inputs.target_environment }}" = "staging" ] && [ "${{ needs.rollback_staging.result }}" = "failure" ]; then
+            FAILED_STAGE="Deploy To EKS"
+            REASON="Rollback deployment failed, or rollout did not become healthy within the 5 minute timeout."
+          elif [ "${{ inputs.target_environment }}" = "production" ] && [ "${{ needs.rollback_production.result }}" = "failure" ]; then
+            FAILED_STAGE="Deploy To EKS"
+            REASON="Rollback deployment failed, or rollout did not become healthy within the 5 minute timeout."
+          fi
+
+          if [ -n "$FAILED_STAGE" ]; then
+            CONTENT=$(cat <<EOF
+          ❌ **Rollback Failed**
+
+          Repository  : ${{ github.repository }}
+          Environment : ${{ inputs.target_environment }}
+          Target tag  : ${{ inputs.image_tag }}
+
+          Failed at : ${FAILED_STAGE}
+          Reason    : ${REASON}
+
+          Triggered By : ${{ github.actor }}
+
+          🔗 ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EOF
+            )
+          else
+            CONTENT=$(cat <<EOF
+          ⏪ **Rollback Succeeded**
+
+          Repository  : ${{ github.repository }}
+          Environment : ${{ inputs.target_environment }}
+          Deployed tag: ${{ inputs.image_tag }}
+
+          Triggered By : ${{ github.actor }}
+
+          🔗 ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EOF
+            )
+          fi
+
+          curl -sS -F "content=${CONTENT}" "$DISCORD_WEBHOOK"
