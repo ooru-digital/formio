@@ -1,16 +1,24 @@
 # Used by docker-compose.yml to deploy the formio application
 # (When modified, you must include `--build` )
 # -----------------------------------------------------------
-# Stage 1: Builder
-FROM node:20-alpine as builder
+
+# Use Node image, maintained by Docker:
+# hub.docker.com/r/_/node/
+FROM node:20-alpine
+
+# Copy source dependencies
+COPY src/ /app/src/
+COPY config/ /app/config
+COPY *.js /app/
+COPY *.txt /app/
+COPY package.json /app/
 
 WORKDIR /app
 
-# Copy package files
-COPY package.json /app/
-
 # "bcrypt" requires python/make/g++, all must be installed in alpine
+# (note: using pinned versions to ensure immutable build environment)
 RUN apk update && \
+    apk upgrade && \
     apk add make && \
     apk add python3 && \
     apk add g++ && \
@@ -19,29 +27,10 @@ RUN apk update && \
 # Use https to avoid requiring ssh keys for public repos.
 RUN git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
 
-# Install dependencies
+# Use "Continuous Integration" to install as-is from package-lock.json
 RUN yarn install
 
 RUN apk del git
-
-# Copy source dependencies
-COPY src/ /app/src/
-COPY config/ /app/config
-COPY *.js /app/
-COPY *.txt /app/
-
-# Stage 2: Runtime
-FROM node:20-alpine
-
-WORKDIR /app
-
-# Copy from builder
-COPY --from=builder /app/node_modules /app/node_modules
-COPY --from=builder /app/src /app/src
-COPY --from=builder /app/config /app/config
-COPY --from=builder /app/*.js /app/
-COPY --from=builder /app/*.txt /app/
-COPY --from=builder /app/package.json /app/
 
 # Set this to inspect more from the application. Examples:
 #   DEBUG=formio:db (see index.js for more)
