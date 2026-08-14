@@ -254,7 +254,7 @@ jobs:
       - name: Send Rollback Notification
         if: ${{ always() }}
         env:
-          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_STAGING_BUILDS_URL }}
         run: |
           if [ -z "$DISCORD_WEBHOOK" ]; then
             echo "::warning::DISCORD_WEBHOOK secret is not configured"

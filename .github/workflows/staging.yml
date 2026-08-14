@@ -144,7 +144,7 @@ jobs:
     if: ${{ always() && needs.classify.outputs.tag_kind != 'invalid' }}
     runs-on: ubuntu-latest
     env:
-      DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+      DISCORD_WEBHOOK: ${{ secrets.DISCORD_STAGING_BUILDS_URL }}
     steps:
       - name: Download Unit Test Report
         if: env.DISCORD_WEBHOOK != ''
