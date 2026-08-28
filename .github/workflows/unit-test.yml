@@ -10,6 +10,7 @@ on:
       NEXUS_PASSWORD:
         required: true
       NEXUS_URL:
+        required: true
 
     outputs:
       test_status:
