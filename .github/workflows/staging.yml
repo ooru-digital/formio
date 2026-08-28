@@ -18,7 +18,7 @@ on:
 jobs:
   classify:
     name: Classify Tag
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, aws]
     outputs:
       tag_kind: ${{ steps.check.outputs.tag_kind }}
     steps:
@@ -50,7 +50,11 @@ jobs:
     needs: [classify]
     if: ${{ needs.classify.outputs.tag_kind != 'invalid' }}
     uses: ./.github/workflows/unit-test.yml
-    secrets: {}
+    secrets:
+      DISCORD_WEBHOOK: ${{ secrets.DISCORD_STAGING_BUILDS_URL }}
+      NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+      NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+      NEXUS_URL: ${{ secrets.NEXUS_URL }}
 
   container_pipeline:
     name: Staging Container Pipeline
@@ -63,13 +67,17 @@ jobs:
       #django_env: STAGING
       docker_context: .
       dockerfile: Dockerfile
-      fail_on_gitleaks: false
+      fail_on_gitleaks: true
       max_image_layers: 35
       max_image_size_mb: 3500
       push_image: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
     secrets:
       registry_username: ${{ secrets.DOCKERHUB_USERNAME }}
       registry_password: ${{ secrets.DOCKERHUB_TOKEN }}
+      DISCORD_WEBHOOK: ${{ secrets.DISCORD_STAGING_BUILDS_URL }}
+      NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+      NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+      NEXUS_URL: ${{ secrets.NEXUS_URL }}
 
   deploy:
     name: Staging Deploy To EKS
@@ -85,14 +93,16 @@ jobs:
       docker_image: docker.io/${{ vars.DOCKERHUB_STAGING_IMAGE_REPOSITORY }}:${{ needs.container_pipeline.outputs.image_tag }}
       formio_deployment_name: formio
       formio_container_name: formio
-      # celery_enabled: true
-      # celery_deployment_name: celery-api
-      # celery_container_name: celery
       unit_test_status: ${{ needs.trigger-integration-tests.outputs.test_status }}
       trivy_status: ${{ needs.container_pipeline.outputs.trivy_status }}
     secrets:
       dockerhub_username: ${{ secrets.DOCKERHUB_USERNAME }}
       dockerhub_token: ${{ secrets.DOCKERHUB_TOKEN }}
+      DISCORD_WEBHOOK: ${{ secrets.DISCORD_STAGING_BUILDS_URL }}
+      NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+      NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+      NEXUS_URL: ${{ secrets.NEXUS_URL }}
+
 
   promote_to_production:
     name: Promote Release Image To Production Registry
@@ -142,25 +152,26 @@ jobs:
         promote_to_production,
       ]
     if: ${{ always() && needs.classify.outputs.tag_kind != 'invalid' }}
-    runs-on: ubuntu-latest
-    env:
+    runs-on: [self-hosted, linux, x64, aws]
       DISCORD_WEBHOOK: ${{ secrets.DISCORD_STAGING_BUILDS_URL }}
     steps:
-      - name: Download Unit Test Report
+      - name: Download Unit Test Report from Nexus
         if: env.DISCORD_WEBHOOK != ''
-        uses: actions/download-artifact@v4
         continue-on-error: true
-        with:
-          name: unit-test-report
-          path: reports/unit-test
+        run: |
+          mkdir -p reports/unit-test
+          curl -sS -f -u "${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}" \
+            -o reports/unit-test/unit-test-report.txt \
+            "${{ secrets.NEXUS_URL }}/repository/CredIssuer/reports/${{ github.event.repository.name }}/${{ github.run_id }}/unit-test-report.txt" || true
 
-      - name: Download Trivy Report
+      - name: Download Trivy Report from Nexus
         if: env.DISCORD_WEBHOOK != ''
-        uses: actions/download-artifact@v4
         continue-on-error: true
-        with:
-          name: trivy-report
-          path: reports/trivy
+        run: |
+          mkdir -p reports/trivy
+          curl -sS -f -u "${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}" \
+            -o reports/trivy/trivy-report.txt \
+            "${{ secrets.NEXUS_URL }}/repository/CredIssuer/reports/${{ github.event.repository.name }}/${{ github.run_id }}/trivy-report.txt" || true
 
       - name: Determine outcome and send single Discord alert
         if: env.DISCORD_WEBHOOK != ''

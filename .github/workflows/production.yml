@@ -8,287 +8,305 @@ on:
   workflow_dispatch:
     inputs:
       deploy_to_eks:
-        description: "Deploy to production EKS after promotion"
+        description: "Deploy to production EKS after Docker push"
         required: false
         default: false
         type: boolean
-      release_tag:
-        description: "Release tag to promote, e.g. v2.0.1"
-        required: true
-        type: string
-      source_rc_tag:
-        description: "Optional: exact RC tag to promote (e.g. v2.0.1-RC2). Leave blank to auto-detect the latest matching RC."
-        required: false
-        type: string
-  # Production is manual-only. Uncomment below if you later want a v-tag push
-  # to also trigger this pipeline automatically.
-  # push:
-  #   tags:
-  #     - 'v*'
 
 jobs:
-  classify:
-    name: Classify Release Tag
-    runs-on: ubuntu-latest
-    outputs:
-      is_release: ${{ steps.check.outputs.is_release }}
-    steps:
-      - name: Check release_tag matches release pattern (case-insensitive, no suffix)
-        id: check
-        run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            TAG="${{ github.ref_name }}"
-          else
-            TAG="${{ inputs.release_tag }}"
-          fi
-
-          if [ -z "$TAG" ]; then
-            echo "::error::release_tag is required."
-            echo "is_release=false" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-
-          LOWER=$(echo "$TAG" | tr '[:upper:]' '[:lower:]')
-
-          if [[ "$LOWER" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Tag '$TAG' matches release pattern (vX.Y.Z, no suffix). Proceeding to production."
-            echo "is_release=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "Tag '$TAG' does not match release pattern (vX.Y.Z). Production pipeline will not run."
-            echo "is_release=false" >> "$GITHUB_OUTPUT"
-          fi
-
-  resolve:
-    name: Resolve Release And Source RC Tags
-    needs: [classify]
-    if: ${{ needs.classify.outputs.is_release == 'true' }}
-    runs-on: ubuntu-latest
-    outputs:
-      release_tag: ${{ steps.resolve.outputs.release_tag }}
-      source_rc_tag: ${{ steps.resolve.outputs.source_rc_tag }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Determine release tag and source RC tag
-        id: resolve
-        run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            RELEASE_TAG="${{ github.ref_name }}"
-          else
-            RELEASE_TAG="${{ inputs.release_tag }}"
-          fi
-
-          if [ -z "$RELEASE_TAG" ]; then
-            echo "::error::release_tag is required."
-            exit 1
-          fi
-
-          if [ -n "${{ inputs.source_rc_tag }}" ]; then
-            SOURCE_RC_TAG="${{ inputs.source_rc_tag }}"
-          else
-            LOWER_RELEASE=$(echo "$RELEASE_TAG" | tr '[:upper:]' '[:lower:]')
-            ESCAPED=$(echo "$LOWER_RELEASE" | sed 's/[][\.^$*+?(){}|]/\\&/g')
-            PATTERN="^${ESCAPED}-rc[0-9]+$"
-
-            for t in $(git tag --list); do
-              lt=$(echo "$t" | tr '[:upper:]' '[:lower:]')
-              if [[ "$lt" =~ $PATTERN ]]; then
-                echo "$t"
-              fi
-            done | sort -V | tail -n1 > /tmp/latest_rc.txt
-            SOURCE_RC_TAG=$(cat /tmp/latest_rc.txt)
-
-            if [ -z "$SOURCE_RC_TAG" ]; then
-              echo "::error::No RC tag found matching ${RELEASE_TAG}-RCn (any case). Cannot promote without a source RC image."
-              exit 1
-            fi
-          fi
-
-          echo "Release tag    : $RELEASE_TAG"
-          echo "Source RC tag  : $SOURCE_RC_TAG"
-
-          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
-          echo "source_rc_tag=$SOURCE_RC_TAG" >> "$GITHUB_OUTPUT"
-
+  # ---------------------------------------------------------
+  # UNIT TESTS
+  # ---------------------------------------------------------
   trigger-unit-tests:
     name: Production Unit Tests
-    needs: [classify]
-    if: ${{ needs.classify.outputs.is_release == 'true' }}
     uses: ./.github/workflows/unit-test.yml
-    secrets: {}
+    secrets:
+      DISCORD_WEBHOOK: ${{ secrets.DISCORD_PRODUCTION_BUILDS_URL }}
+      NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+      NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+      NEXUS_URL: ${{ secrets.NEXUS_URL }}
 
-  trigger-automation-tests:
-    name: Production Automation Tests
-    needs: [classify]
-    if: ${{ needs.classify.outputs.is_release == 'true' }}
-    uses: ./.github/workflows/integration-tests.yml
-    secrets: {}
+  # ---------------------------------------------------------
+  # BUILD + SECURITY SCANS + DOCKER PUSH
+  # ---------------------------------------------------------
+  container_pipeline:
+    name: Production Container Pipeline
+    needs:
+      - trigger-unit-tests
+      - trigger-automation-tests
 
-  promote:
-    name: Promote Staging RC Image To Production
-    needs: [classify, resolve, trigger-unit-tests, trigger-automation-tests]
-    if: ${{ needs.classify.outputs.is_release == 'true' && needs.resolve.result == 'success' && needs.trigger-unit-tests.result == 'success' && needs.trigger-automation-tests.result == 'success' }}
-    runs-on: [self-hosted, linux, x64, aws]
-    outputs:
-      image_tag: ${{ steps.promote.outputs.image_tag }}
-    steps:
-      - name: Registry login
-        uses: docker/login-action@v3
-        with:
-          registry: docker.io
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+    if: >-
+      ${{ 
+        needs.trigger-unit-tests.result == 'success' &&
+        needs.trigger-automation-tests.result == 'success'
+      }}
 
-      - name: Pull approved RC image from staging repository
-        run: |
-          docker pull "docker.io/${{ vars.DOCKERHUB_STAGING_IMAGE_REPOSITORY }}:${{ needs.resolve.outputs.source_rc_tag }}"
+    uses: ./.github/workflows/container-pipeline.yml
 
-      - name: Tag and push as production release (registry promotion, no rebuild)
-        id: promote
-        run: |
-          SRC="docker.io/${{ vars.DOCKERHUB_STAGING_IMAGE_REPOSITORY }}:${{ needs.resolve.outputs.source_rc_tag }}"
-          DEST="docker.io/${{ vars.DOCKERHUB_PRODUCTION_IMAGE_REPOSITORY }}:${{ needs.resolve.outputs.release_tag }}"
-          DEST_LATEST="docker.io/${{ vars.DOCKERHUB_PRODUCTION_IMAGE_REPOSITORY }}:latest"
+    with:
+      registry: docker.io
+      image_repository: ${{ vars.DOCKERHUB_PRODUCTION_IMAGE_REPOSITORY }}
+      image_tag_prefix: prod
+      django_env: PRODUCTION
+      docker_context: .
+      dockerfile: Dockerfile
+      fail_on_gitleaks: true
+      max_image_layers: 35
+      max_image_size_mb: 3500
+      push_image: true
 
-          docker tag "$SRC" "$DEST"
-          docker tag "$SRC" "$DEST_LATEST"
+    secrets:
+      registry_username: ${{ secrets.DOCKERHUB_USERNAME }}
+      registry_password: ${{ secrets.DOCKERHUB_TOKEN }}
+      DISCORD_WEBHOOK: ${{ secrets.DISCORD_PRODUCTION_BUILDS_URL }}
+      NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+      NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+      NEXUS_URL: ${{ secrets.NEXUS_URL }}
 
-          docker push "$DEST"
-          docker push "$DEST_LATEST"
-
-          echo "image_tag=${{ needs.resolve.outputs.release_tag }}" >> "$GITHUB_OUTPUT"
-
-      - name: Image cleanup
-        if: always()
-        run: |
-          docker image rm "docker.io/${{ vars.DOCKERHUB_STAGING_IMAGE_REPOSITORY }}:${{ needs.resolve.outputs.source_rc_tag }}" || true
-          docker image rm "docker.io/${{ vars.DOCKERHUB_PRODUCTION_IMAGE_REPOSITORY }}:${{ needs.resolve.outputs.release_tag }}" || true
-          docker image rm "docker.io/${{ vars.DOCKERHUB_PRODUCTION_IMAGE_REPOSITORY }}:latest" || true
-          docker image prune -af || true
-
+  # ---------------------------------------------------------
+  # DEPLOY TO PRODUCTION EKS
+  # ---------------------------------------------------------
   deploy:
     name: Production Deploy To EKS
-    needs: [classify, promote]
-    if: ${{ needs.classify.outputs.is_release == 'true' && needs.promote.result == 'success' && inputs.deploy_to_eks == true }}
+
+    needs:
+      - trigger-unit-tests
+      - trigger-automation-tests
+      - container_pipeline
+
+    if: >-
+      ${{
+        needs.trigger-unit-tests.result == 'success' &&
+        needs.trigger-automation-tests.result == 'success' &&
+        needs.container_pipeline.result == 'success' &&
+        inputs.deploy_to_eks == true
+      }}
+
     uses: ./.github/workflows/deploy-eks.yml
+
     with:
       aws_region: ${{ vars.AWS_REGION }}
+
       aws_role_to_assume: ${{ vars.PRODUCTION_GITHUB_ACTIONS_AWS_ROLE_ARN }}
+
       eks_cluster_name: ${{ vars.PRODUCTION_EKS_CLUSTER_NAME }}
+
       kubernetes_namespace: ${{ vars.PRODUCTION_KUBERNETES_NAMESPACE }}
-      manifest_dir: deploy/eks/staging
-      docker_image: docker.io/${{ vars.DOCKERHUB_PRODUCTION_IMAGE_REPOSITORY }}:${{ needs.promote.outputs.image_tag }}
-      service_account_name: ${{ vars.PRODUCTION_K8S_SERVICE_ACCOUNT_NAME }}
+
+      manifest_dir: deploy/eks/production
+
+      manifest_files: >-
+        credflow-api-deployment.yaml
+        celery-deployment.yaml
+
+      docker_image: >-
+        docker.io/${{ vars.DOCKERHUB_PRODUCTION_IMAGE_REPOSITORY }}:${{ needs.container_pipeline.outputs.image_tag }}
+
       image_pull_secret_name: dockerhub-registry
-      pod_irsa_role_arn: ${{ vars.PRODUCTION_EKS_APP_IRSA_ROLE_ARN }}
-      django_env: PROD
-      aws_env_path: ${{ vars.PRODUCTION_AWS_ENV_PATH }}
-      aws_secret_path: ${{ vars.PRODUCTION_AWS_SECRET_PATH }}
-      aws_did_secret_prefix: ${{ vars.PRODUCTION_AWS_DID_SECRET_PREFIX }}
-      api_replicas: 2
-      celery_replicas: 3
-      celery_broker_url: ${{ vars.PRODUCTION_CELERY_BROKER_URL }}
+
+      api_deployment_name: credflow-api
+      api_container_name: api
+
+      celery_enabled: true
+      celery_deployment_name: celery-api
+      celery_container_name: celery
+
+      unit_test_status: ${{ needs.trigger-unit-tests.outputs.test_status }}
+
+      trivy_status: ${{ needs.container_pipeline.outputs.trivy_status }}
+
     secrets:
       dockerhub_username: ${{ secrets.DOCKERHUB_USERNAME }}
       dockerhub_token: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      DISCORD_WEBHOOK: ${{ secrets.DISCORD_PRODUCTION_BUILDS_URL }}
+
+      NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+      NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+      NEXUS_URL: ${{ secrets.NEXUS_URL }}
+
+  # ---------------------------------------------------------
+  # FINAL PIPELINE NOTIFICATION
+  # ---------------------------------------------------------
   notify:
     name: Pipeline Result Notification
+
     needs:
-      [
-        classify,
-        resolve,
-        trigger-unit-tests,
-        trigger-automation-tests,
-        promote,
-        deploy,
-      ]
-    if: ${{ always() && needs.classify.outputs.is_release == 'true' }}
-    runs-on: ubuntu-latest
+      - trigger-unit-tests
+      - trigger-automation-tests
+      - container_pipeline
+      - deploy
+
+    if: ${{ always() }}
+
+    runs-on: [self-hosted, linux, x64, aws]
+
     env:
       DISCORD_WEBHOOK: ${{ secrets.DISCORD_PRODUCTION_BUILDS_URL }}
-    steps:
-      - name: Download Unit Test Report
-        if: env.DISCORD_WEBHOOK != ''
-        uses: actions/download-artifact@v4
-        continue-on-error: true
-        with:
-          name: unit-test-report
-          path: reports/unit-test
 
+    steps:
+      # -----------------------------------------------------
+      # DOWNLOAD UNIT TEST REPORT
+      # -----------------------------------------------------
+      - name: Download Unit Test Report from Nexus
+        if: env.DISCORD_WEBHOOK != ''
+        continue-on-error: true
+
+        run: |
+          mkdir -p reports/unit-test
+
+          curl -sS -f \
+            -u "${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}" \
+            -o reports/unit-test/unit-test-report.txt \
+            "${{ secrets.NEXUS_URL }}/repository/CredIssuer/reports/${{ github.event.repository.name }}/${{ github.run_id }}/unit-test-report.txt" \
+            || true
+
+      # -----------------------------------------------------
+      # DOWNLOAD TRIVY REPORT
+      # -----------------------------------------------------
+      - name: Download Trivy Report from Nexus
+        if: env.DISCORD_WEBHOOK != ''
+        continue-on-error: true
+
+        run: |
+          mkdir -p reports/trivy
+
+          curl -sS -f \
+            -u "${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}" \
+            -o reports/trivy/trivy-report.txt \
+            "${{ secrets.NEXUS_URL }}/repository/CredIssuer/reports/${{ github.event.repository.name }}/${{ github.run_id }}/trivy-report.txt" \
+            || true
+
+      # -----------------------------------------------------
+      # DETERMINE FINAL PIPELINE STATUS
+      # -----------------------------------------------------
       - name: Determine outcome and send single Discord alert
         if: env.DISCORD_WEBHOOK != ''
-        run: |
-          UNIT_STATUS="${{ needs.trigger-unit-tests.outputs.test_status }}"
 
+        run: |
           FAILED_STAGE=""
           REASON=""
 
-          if [ "${{ needs.resolve.result }}" = "failure" ]; then
-            FAILED_STAGE="Resolve Release/RC Tag"
-            REASON="No matching RC tag was found to promote, or release_tag was missing."
-          elif [ "${{ needs.trigger-unit-tests.result }}" = "failure" ]; then
+          UNIT_TEST_RESULT="${{ needs.trigger-unit-tests.result }}"
+          AUTOMATION_TEST_RESULT="${{ needs.trigger-automation-tests.result }}"
+          CONTAINER_RESULT="${{ needs.container_pipeline.result }}"
+          DEPLOY_RESULT="${{ needs.deploy.result }}"
+
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          # -------------------------------------------------
+          # Determine which stage failed
+          # -------------------------------------------------
+          if [ "$UNIT_TEST_RESULT" = "failure" ]; then
+
             FAILED_STAGE="Unit Tests"
             REASON="Unit test pass percentage was below the required threshold."
-          elif [ "${{ needs.trigger-automation-tests.result }}" = "failure" ]; then
+
+          elif [ "$AUTOMATION_TEST_RESULT" = "failure" ]; then
+
             FAILED_STAGE="Automation Tests"
             REASON="Automation/integration test suite failed."
-          elif [ "${{ needs.promote.result }}" = "failure" ]; then
-            FAILED_STAGE="Promote To Production"
-            REASON="Could not pull the RC image from staging or push it to the production registry."
-          elif [ "${{ needs.deploy.result }}" = "failure" ]; then
+
+          elif [ "$CONTAINER_RESULT" = "failure" ]; then
+
+            FAILED_STAGE="Container Pipeline"
+            REASON="Build, Gitleaks, Trivy, or Docker push failed."
+
+          elif [ "$DEPLOY_RESULT" = "failure" ]; then
+
             FAILED_STAGE="Deploy To EKS"
-            REASON="Deployment failed, or rollout did not become healthy within the 5 minute timeout."
+            REASON="Deployment failed, or rollout did not become healthy within the timeout."
+
           fi
 
+          # -------------------------------------------------
+          # FAILURE NOTIFICATION
+          # -------------------------------------------------
           if [ -n "$FAILED_STAGE" ]; then
+
             CONTENT=$(cat <<EOF
           ❌ **Production Pipeline Failed**
 
-          Repository  : ${{ github.repository }}
-          Release tag : ${{ needs.resolve.outputs.release_tag }}
+          **Repository**
+          ${{ github.repository }}
 
-          Failed at : ${FAILED_STAGE}
-          Reason    : ${REASON}
+          **Branch**
+          ${{ github.ref_name }}
 
-          Triggered By : ${{ github.actor }}
+          **Failed Stage**
+          ${FAILED_STAGE}
 
-          🔗 ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          **Reason**
+          ${REASON}
+
+          **Pipeline Status**
+
+          Unit Tests       : ${UNIT_TEST_RESULT}
+          Automation Tests : ${AUTOMATION_TEST_RESULT}
+          Container Build  : ${CONTAINER_RESULT}
+          Deploy To EKS    : ${DEPLOY_RESULT}
+
+          **Triggered By**
+          ${{ github.actor }}
+
+          🔗 ${RUN_URL}
           EOF
-            )
-            curl -sS -F "content=${CONTENT}" "$DISCORD_WEBHOOK"
+          )
+
+          # -------------------------------------------------
+          # SUCCESS NOTIFICATION
+          # -------------------------------------------------
           else
-            if [ "${{ needs.deploy.result }}" = "success" ]; then
-              DEPLOY_STATUS="PASSED"
+
+            if [ "$DEPLOY_RESULT" = "skipped" ]; then
+
+              DEPLOY_MESSAGE="Skipped (Deploy to EKS was not selected)"
+
             else
-              DEPLOY_STATUS="NOT DEPLOYED (promoted to registry only)"
+
+              DEPLOY_MESSAGE="${DEPLOY_RESULT}"
+
             fi
 
-            UNIT_REPORT_STATUS="Not available"
-            [ -f reports/unit-test/unit-test-report.txt ] && UNIT_REPORT_STATUS="Attached"
-
             CONTENT=$(cat <<EOF
-          🚀 **Production Deployment Report**
+          ✅ **Production Pipeline Successful**
 
-          Repository  : ${{ github.repository }}
-          Release tag : ${{ needs.resolve.outputs.release_tag }}
-          Source RC   : ${{ needs.resolve.outputs.source_rc_tag }}
+          **Repository**
+          ${{ github.repository }}
 
-          Deployment : ${DEPLOY_STATUS}
+          **Branch**
+          ${{ github.ref_name }}
 
-          Unit Test Report : ${UNIT_REPORT_STATUS}
+          **Pipeline Status**
 
-          Triggered By : ${{ github.actor }}
+          Unit Tests       : ${UNIT_TEST_RESULT}
+          Automation Tests : ${AUTOMATION_TEST_RESULT}
+          Container Build  : ${CONTAINER_RESULT}
+          Deploy To EKS    : ${DEPLOY_MESSAGE}
 
-          🔗 ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          **Docker Image**
+          docker.io/${{ vars.DOCKERHUB_PRODUCTION_IMAGE_REPOSITORY }}:${{ needs.container_pipeline.outputs.image_tag }}
+
+          **Triggered By**
+          ${{ github.actor }}
+
+          🔗 ${RUN_URL}
           EOF
-            )
+          )
 
-            CURL_ARGS=(-sS -F "content=${CONTENT}")
-            [ -f reports/unit-test/unit-test-report.txt ] && CURL_ARGS+=(-F "file1=@reports/unit-test/unit-test-report.txt")
-
-            curl "${CURL_ARGS[@]}" "$DISCORD_WEBHOOK"
           fi
+
+          # -------------------------------------------------
+          # CREATE JSON PAYLOAD SAFELY
+          # -------------------------------------------------
+          PAYLOAD=$(jq -n \
+            --arg content "$CONTENT" \
+            '{content: $content}')
+
+          # -------------------------------------------------
+          # SEND DISCORD MESSAGE
+          # -------------------------------------------------
+          curl -sS \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$DISCORD_WEBHOOK"
