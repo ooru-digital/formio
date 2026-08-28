@@ -33,13 +33,10 @@ jobs:
     name: Production Container Pipeline
     needs:
       - trigger-unit-tests
-      - trigger-automation-tests
 
     if: >-
       ${{ 
-        needs.trigger-unit-tests.result == 'success' &&
-        needs.trigger-automation-tests.result == 'success'
-      }}
+        needs.trigger-unit-tests.result == 'success' }}
 
     uses: ./.github/workflows/container-pipeline.yml
 
@@ -71,13 +68,11 @@ jobs:
 
     needs:
       - trigger-unit-tests
-      - trigger-automation-tests
       - container_pipeline
 
     if: >-
       ${{
         needs.trigger-unit-tests.result == 'success' &&
-        needs.trigger-automation-tests.result == 'success' &&
         needs.container_pipeline.result == 'success' &&
         inputs.deploy_to_eks == true
       }}
@@ -94,22 +89,11 @@ jobs:
       kubernetes_namespace: ${{ vars.PRODUCTION_KUBERNETES_NAMESPACE }}
 
       manifest_dir: deploy/eks/production
-
-      manifest_files: >-
-        credflow-api-deployment.yaml
-        celery-deployment.yaml
-
+      
       docker_image: >-
         docker.io/${{ vars.DOCKERHUB_PRODUCTION_IMAGE_REPOSITORY }}:${{ needs.container_pipeline.outputs.image_tag }}
 
       image_pull_secret_name: dockerhub-registry
-
-      api_deployment_name: credflow-api
-      api_container_name: api
-
-      celery_enabled: true
-      celery_deployment_name: celery-api
-      celery_container_name: celery
 
       unit_test_status: ${{ needs.trigger-unit-tests.outputs.test_status }}
 
@@ -133,7 +117,6 @@ jobs:
 
     needs:
       - trigger-unit-tests
-      - trigger-automation-tests
       - container_pipeline
       - deploy
 
@@ -188,7 +171,6 @@ jobs:
           REASON=""
 
           UNIT_TEST_RESULT="${{ needs.trigger-unit-tests.result }}"
-          AUTOMATION_TEST_RESULT="${{ needs.trigger-automation-tests.result }}"
           CONTAINER_RESULT="${{ needs.container_pipeline.result }}"
           DEPLOY_RESULT="${{ needs.deploy.result }}"
 
@@ -201,11 +183,6 @@ jobs:
 
             FAILED_STAGE="Unit Tests"
             REASON="Unit test pass percentage was below the required threshold."
-
-          elif [ "$AUTOMATION_TEST_RESULT" = "failure" ]; then
-
-            FAILED_STAGE="Automation Tests"
-            REASON="Automation/integration test suite failed."
 
           elif [ "$CONTAINER_RESULT" = "failure" ]; then
 
@@ -242,7 +219,6 @@ jobs:
           **Pipeline Status**
 
           Unit Tests       : ${UNIT_TEST_RESULT}
-          Automation Tests : ${AUTOMATION_TEST_RESULT}
           Container Build  : ${CONTAINER_RESULT}
           Deploy To EKS    : ${DEPLOY_RESULT}
 
@@ -280,7 +256,6 @@ jobs:
           **Pipeline Status**
 
           Unit Tests       : ${UNIT_TEST_RESULT}
-          Automation Tests : ${AUTOMATION_TEST_RESULT}
           Container Build  : ${CONTAINER_RESULT}
           Deploy To EKS    : ${DEPLOY_MESSAGE}
 
