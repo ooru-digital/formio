@@ -33,13 +33,7 @@ jobs:
           image_pull_secret_name: dockerhub-registry
           unit_test_status: "SKIPPED"
           trivy_status: "SKIPPED"
-        secrets:
-          dockerhub_username: ${{ secrets.DOCKERHUB_USERNAME }}
-          dockerhub_token: ${{ secrets.DOCKERHUB_TOKEN }}
-          DISCORD_WEBHOOK: ${{ secrets.DISCORD_PRODUCTION_BUILDS_URL }}
-          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
-          NEXUS_URL: ${{ secrets.NEXUS_URL }}
+        secrets: inherit
 
   notify:
     name: Pipeline Result Notification
