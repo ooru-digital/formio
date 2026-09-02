@@ -20,8 +20,6 @@ jobs:
   trigger-unit-tests:
     name: Production Unit Tests
     uses: ./.github/workflows/unit-test.yml
-    # Note: If your unit-test workflow accepts a ref/branch input, you can pass it here. 
-    # Otherwise, it runs on the selected branch context.
     secrets:
       DISCORD_WEBHOOK: ${{ secrets.DISCORD_PRODUCTION_BUILDS_URL }}
       NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
