@@ -46,6 +46,7 @@ jobs:
       fail_on_gitleaks: true
       max_image_layers: 35
       max_image_size_mb: 3500
+      push_image: true
 
     secrets:
       registry_username: ${{ secrets.DOCKERHUB_USERNAME }}
