@@ -7,7 +7,7 @@ Form.io is a revolutionary combined Form and API platform for Serverless applica
 ```<formio>``` HTML element.
 
 Walkthrough video and tutorial
--------------------
+-----------------------
 For a walkthrough tutorial on how to use this Open Source platform to build a Serverless application, watch the video [0 to M.E.A.N in 30 minutes](https://www.youtube.com/watch?v=d2gTYkPFhPI)
 
 Form Building & Rendering Demo
