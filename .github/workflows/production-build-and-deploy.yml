@@ -1,4 +1,4 @@
-name: staging Build and Deploy
+name: Production Build and Deploy
 
 permissions:
   contents: read
@@ -10,7 +10,7 @@ on:
       branch:
         description: "Enter branch name to build and deploy"
         required: true
-        default: "staging"
+        default: "main"
         type: string
 
 jobs:
@@ -18,10 +18,10 @@ jobs:
   # UNIT TESTS
   # ---------------------------------------------------------
   trigger-unit-tests:
-    name: staging Unit Tests
+    name: Production Unit Tests
     uses: ./.github/workflows/unit-test.yml
     secrets:
-      DISCORD_WEBHOOK: ${{ secrets.DISCORD_STAGING_BUILDS_URL }}
+      DISCORD_WEBHOOK: ${{ secrets.DISCORD_PRODUCTION_BUILDS_URL }}
       NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
       NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
       NEXUS_URL: ${{ secrets.NEXUS_URL }}
@@ -30,7 +30,7 @@ jobs:
   # BUILD + SECURITY SCANS + DOCKER PUSH
   # ---------------------------------------------------------
   container_pipeline:
-    name: staging Container Pipeline
+    name: Production Container Pipeline
     needs:
       - trigger-unit-tests
 
@@ -40,7 +40,9 @@ jobs:
 
     with:
       registry: docker.io
-      image_repository: ${{ vars.DOCKERHUB_STAGING_IMAGE_REPOSITORY }}
+      image_repository: ${{ vars.DOCKERHUB_IMAGE_REPOSITORY_PROD }}
+      image_tag_prefix: prod
+      django_env: PRODUCTION
       docker_context: .
       dockerfile: Dockerfile
       fail_on_gitleaks: true
@@ -51,16 +53,16 @@ jobs:
     secrets:
       registry_username: ${{ secrets.DOCKERHUB_USERNAME }}
       registry_password: ${{ secrets.DOCKERHUB_TOKEN }}
-      DISCORD_STAGING_BUILDS_URL: ${{ secrets.DISCORD_STAGING_BUILDS_URL }}
+      DISCORD_WEBHOOK: ${{ secrets.DISCORD_PRODUCTION_BUILDS_URL }}
       NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
       NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
       NEXUS_URL: ${{ secrets.NEXUS_URL }}
 
   # ---------------------------------------------------------
-  # DEPLOY TO staging EKS
+  # DEPLOY TO PRODUCTION EKS
   # ---------------------------------------------------------
   deploy:
-    name: staging Deploy To EKS
+    name: Production Deploy To EKS
 
     needs:
       - trigger-unit-tests
@@ -76,20 +78,19 @@ jobs:
 
     with:
       aws_region: ${{ vars.AWS_REGION }}
-      aws_role_to_assume: ${{ vars.STAGING_GITHUB_ACTIONS_AWS_ROLE_ARN }}
-      eks_cluster_name: ${{ vars.STAGING_EKS_CLUSTER_NAME }}
-      kubernetes_namespace: ${{ vars.STAGING_KUBERNETES_NAMESPACE }}
-      manifest_dir: deploy/eks/staging
-      docker_image: docker.io/${{ vars.DOCKERHUB_STAGING_IMAGE_REPOSITORY }}:${{ needs.container_pipeline.outputs.image_tag }}
-      formio_deployment_name: formio
-      formio_container_name: formio
-      unit_test_status: ${{ needs.trigger-integration-tests.outputs.test_status }}
+      aws_role_to_assume: ${{ vars.PRODUCTION_GITHUB_ACTIONS_AWS_ROLE_ARN }}
+      eks_cluster_name: ${{ vars.PRODUCTION_EKS_CLUSTER_NAME }}
+      kubernetes_namespace: ${{ vars.PRODUCTION_KUBERNETES_NAMESPACE }}
+      manifest_dir: deploy/eks/production
+      docker_image: docker.io/${{ vars.DOCKERHUB_IMAGE_REPOSITORY_PROD }}:${{ needs.container_pipeline.outputs.image_tag }}
+      image_pull_secret_name: dockerhub-registry
+      unit_test_status: ${{ needs.trigger-unit-tests.outputs.test_status }}
       trivy_status: ${{ needs.container_pipeline.outputs.trivy_status }}
-      
+
     secrets:
       dockerhub_username: ${{ secrets.DOCKERHUB_USERNAME }}
       dockerhub_token: ${{ secrets.DOCKERHUB_TOKEN }}
-      DISCORD_WEBHOOK: ${{ secrets.DISCORD_STAGING_BUILDS_URL }}
+      DISCORD_WEBHOOK: ${{ secrets.DISCORD_PRODUCTION_BUILDS_URL }}
       NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
       NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
       NEXUS_URL: ${{ secrets.NEXUS_URL }}
@@ -110,7 +111,7 @@ jobs:
     runs-on: [self-hosted, linux, x64, aws]
 
     env:
-      DISCORD_WEBHOOK: ${{ secrets.DISCORD_STAGING_BUILDS_URL }}
+      DISCORD_WEBHOOK: ${{ secrets.DISCORD_PRODUCTION_BUILDS_URL }}
 
     steps:
       - name: Download Unit Test Report from Nexus
@@ -188,7 +189,7 @@ jobs:
           Container Build  : ${CONTAINER_RESULT}
           Deploy To EKS    : ${DEPLOY_RESULT}
 
-          **Docker Image** : docker.io/${{ vars.DOCKERHUB_STAGING_IMAGE_REPOSITORY }}:${{ needs.container_pipeline.outputs.image_tag }}
+          **Docker Image** : docker.io/${{ vars.DOCKERHUB_IMAGE_REPOSITORY_PROD }}:${{ needs.container_pipeline.outputs.image_tag }}
           **Triggered By** : ${{ github.actor }}
           🔗 ${RUN_URL}
           EOF
