@@ -15,24 +15,17 @@ on:
 jobs:
   deploy:
     name: Production Deploy To EKS
-    runs-on: [self-hosted, linux, x64, aws]
-
-    steps:
-      - name: Checkout Repository (for manifests)
-        uses: actions/checkout@v4
-
-      - name: Trigger EKS Deployment
-        uses: ./.github/workflows/deploy-eks.yml
-        with:
-          aws_region: ${{ vars.AWS_REGION }}
-          aws_role_to_assume: ${{ vars.STAGING_GITHUB_ACTIONS_AWS_ROLE_ARN }}
-          eks_cluster_name: ${{ vars.STAGING_EKS_CLUSTER_NAME }}
-          kubernetes_namespace: ${{ vars.STAGING_KUBERNETES_NAMESPACE }}
-          manifest_dir: deploy/eks/staging
-          docker_image: docker.io/${{ vars.DOCKERHUB_STAGING_IMAGE_REPOSITORY }}:${{ inputs.image_tag }}
-          image_pull_secret_name: dockerhub-registry
-          unit_test_status: "SKIPPED"
-          trivy_status: "SKIPPED"
+    uses: ./.github/workflows/deploy-eks.yml
+    with:
+      aws_region: ${{ vars.AWS_REGION }}
+      aws_role_to_assume: ${{ vars.STAGING_GITHUB_ACTIONS_AWS_ROLE_ARN }}
+      eks_cluster_name: ${{ vars.STAGING_EKS_CLUSTER_NAME }}
+      kubernetes_namespace: ${{ vars.STAGING_KUBERNETES_NAMESPACE }}
+      manifest_dir: deploy/eks/staging
+      docker_image: docker.io/${{ vars.DOCKERHUB_STAGING_IMAGE_REPOSITORY }}:${{ inputs.image_tag }}
+      image_pull_secret_name: dockerhub-registry
+      unit_test_status: "SKIPPED"
+      trivy_status: "SKIPPED"
 
   notify:
     name: Pipeline Result Notification
