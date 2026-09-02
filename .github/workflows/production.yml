@@ -42,7 +42,7 @@ jobs:
 
     with:
       registry: docker.io
-      image_repository: ${{ vars.DOCKERHUB_PRODUCTION_IMAGE_REPOSITORY }}
+      image_repository: ${{ vars.DOCKERHUB_IMAGE_REPOSITORY_PROD }}
       image_tag_prefix: prod
       django_env: PRODUCTION
       docker_context: .
@@ -91,7 +91,7 @@ jobs:
       manifest_dir: deploy/eks/production
       
       docker_image: >-
-        docker.io/${{ vars.DOCKERHUB_PRODUCTION_IMAGE_REPOSITORY }}:${{ needs.container_pipeline.outputs.image_tag }}
+        docker.io/${{ vars.DOCKERHUB_IMAGE_REPOSITORY_PROD }}:${{ needs.container_pipeline.outputs.image_tag }}
 
       image_pull_secret_name: dockerhub-registry
 
@@ -260,7 +260,7 @@ jobs:
           Deploy To EKS    : ${DEPLOY_MESSAGE}
 
           **Docker Image**
-          docker.io/${{ vars.DOCKERHUB_PRODUCTION_IMAGE_REPOSITORY }}:${{ needs.container_pipeline.outputs.image_tag }}
+          docker.io/${{ vars.DOCKERHUB_IMAGE_REPOSITORY_PROD }}:${{ needs.container_pipeline.outputs.image_tag }}
 
           **Triggered By**
           ${{ github.actor }}
