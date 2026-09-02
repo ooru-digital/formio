@@ -10,7 +10,7 @@ on:
       branch:
         description: "Enter branch name to build and deploy"
         required: true
-        default: "staging"
+        default: "main"
         type: string
 
 jobs:
