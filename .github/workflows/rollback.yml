@@ -75,7 +75,7 @@ jobs:
             echo "AWS_ROLE=${{ vars.PRODUCTION_GITHUB_ACTIONS_AWS_ROLE_ARN }}" >> "$GITHUB_OUTPUT"
             echo "EKS_CLUSTER=${{ vars.PRODUCTION_EKS_CLUSTER_NAME }}" >> "$GITHUB_OUTPUT"
             echo "NAMESPACE=${{ vars.PRODUCTION_KUBERNETES_NAMESPACE }}" >> "$GITHUB_OUTPUT"
-            echo "IMAGE_REPOSITORY=${{ vars.DOCKERHUB_PRODUCTION_IMAGE_REPOSITORY }}" >> "$GITHUB_OUTPUT"
+            echo "IMAGE_REPOSITORY=${{ vars.DOCKERHUB_IMAGE_REPOSITORY_PROD }}" >> "$GITHUB_OUTPUT"
           fi
 
       # --------------------------------------------------
