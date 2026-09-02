@@ -64,7 +64,6 @@ jobs:
     with:
       registry: docker.io
       image_repository: ${{ vars.DOCKERHUB_STAGING_IMAGE_REPOSITORY }}
-      #django_env: STAGING
       docker_context: .
       dockerfile: Dockerfile
       fail_on_gitleaks: true
@@ -103,7 +102,6 @@ jobs:
       NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
       NEXUS_URL: ${{ secrets.NEXUS_URL }}
 
-
   promote_to_production:
     name: Promote Release Image To Production Registry
     needs: [classify, container_pipeline]
@@ -119,17 +117,21 @@ jobs:
 
       - name: Pull the image just built for staging
         run: |
-          docker pull "docker.io/${{ vars.DOCKERHUB_STAGING_IMAGE_REPOSITORY }}:${{ needs.container_pipeline.outputs.image_tag }}"
+          SRC_IMAGE="docker.io/${{ vars.DOCKERHUB_STAGING_IMAGE_REPOSITORY }}:${{ needs.container_pipeline.outputs.image_tag }}"
+          echo "Pulling staging image: $SRC_IMAGE"
+          docker pull "$SRC_IMAGE"
 
-      - name: Tag and push to production registry (no rebuild, not deployed to prod yet)
+      - name: Tag and push to production registry (no rebuild, manual deployment)
         run: |
           SRC="docker.io/${{ vars.DOCKERHUB_STAGING_IMAGE_REPOSITORY }}:${{ needs.container_pipeline.outputs.image_tag }}"
           DEST="docker.io/${{ vars.DOCKERHUB_PRODUCTION_IMAGE_REPOSITORY }}:${{ needs.container_pipeline.outputs.image_tag }}"
           DEST_LATEST="docker.io/${{ vars.DOCKERHUB_PRODUCTION_IMAGE_REPOSITORY }}:latest"
 
+          echo "Tagging images for production..."
           docker tag "$SRC" "$DEST"
           docker tag "$SRC" "$DEST_LATEST"
 
+          echo "Pushing to production repository..."
           docker push "$DEST"
           docker push "$DEST_LATEST"
 
@@ -212,7 +214,7 @@ jobs:
           Branch/Tag : ${{ github.ref_name }}
 
           Failed at : ${FAILED_STAGE}
-          Reason    : ${REASON}
+          Reason    : ${REaaS}
 
           Triggered By : ${{ github.actor }}
 
