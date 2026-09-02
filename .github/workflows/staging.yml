@@ -124,8 +124,8 @@ jobs:
       - name: Tag and push to production registry (no rebuild, manual deployment)
         run: |
           SRC="docker.io/${{ vars.DOCKERHUB_STAGING_IMAGE_REPOSITORY }}:${{ needs.container_pipeline.outputs.image_tag }}"
-          DEST="docker.io/${{ vars.DOCKERHUB_PRODUCTION_IMAGE_REPOSITORY }}:${{ needs.container_pipeline.outputs.image_tag }}"
-          DEST_LATEST="docker.io/${{ vars.DOCKERHUB_PRODUCTION_IMAGE_REPOSITORY }}:latest"
+          DEST="docker.io/${{ vars.DOCKERHUB_IMAGE_REPOSITORY_PROD }}:${{ needs.container_pipeline.outputs.image_tag }}"
+          DEST_LATEST="docker.io/${{ vars.DOCKERHUB_IMAGE_REPOSITORY_PROD }}:latest"
 
           echo "Tagging images for production..."
           docker tag "$SRC" "$DEST"
@@ -139,8 +139,8 @@ jobs:
         if: always()
         run: |
           docker image rm "docker.io/${{ vars.DOCKERHUB_STAGING_IMAGE_REPOSITORY }}:${{ needs.container_pipeline.outputs.image_tag }}" || true
-          docker image rm "docker.io/${{ vars.DOCKERHUB_PRODUCTION_IMAGE_REPOSITORY }}:${{ needs.container_pipeline.outputs.image_tag }}" || true
-          docker image rm "docker.io/${{ vars.DOCKERHUB_PRODUCTION_IMAGE_REPOSITORY }}:latest" || true
+          docker image rm "docker.io/${{ vars.DOCKERHUB_IMAGE_REPOSITORY_PROD }}:${{ needs.container_pipeline.outputs.image_tag }}" || true
+          docker image rm "docker.io/${{ vars.DOCKERHUB_IMAGE_REPOSITORY_PROD }}:latest" || true
           docker image prune -af || true
 
   notify:
