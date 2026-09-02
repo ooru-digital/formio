@@ -23,9 +23,14 @@ jobs:
       kubernetes_namespace: ${{ vars.STAGING_KUBERNETES_NAMESPACE }}
       manifest_dir: deploy/eks/staging
       docker_image: docker.io/${{ vars.DOCKERHUB_STAGING_IMAGE_REPOSITORY }}:${{ inputs.image_tag }}
-      image_pull_secret_name: dockerhub-registry
       unit_test_status: "SKIPPED"
       trivy_status: "SKIPPED"
+    secrets:
+      dockerhub_username: ${{ secrets.DOCKERHUB_USERNAME }}
+      dockerhub_token: ${{ secrets.DOCKERHUB_TOKEN }}
+      NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+      NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+      NEXUS_URL: ${{ secrets.NEXUS_URL }}
 
   notify:
     name: Pipeline Result Notification
@@ -33,7 +38,7 @@ jobs:
     if: ${{ always() }}
     runs-on: [self-hosted, linux, x64, aws]
     env:
-      DISCORD_WEBHOOK: ${{ secrets.DISCORD_PRODUCTION_BUILDS_URL }}
+      DISCORD_WEBHOOK: ${{ secrets.DISCORD_STAGING_BUILDS_URL }}
     steps:
       - name: Send Discord Alert
         if: env.DISCORD_WEBHOOK != ''
