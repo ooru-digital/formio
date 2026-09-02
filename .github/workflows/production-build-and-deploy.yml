@@ -84,6 +84,8 @@ jobs:
       manifest_dir: deploy/eks/production
       docker_image: docker.io/${{ vars.DOCKERHUB_IMAGE_REPOSITORY_PROD }}:${{ needs.container_pipeline.outputs.image_tag }}
       image_pull_secret_name: dockerhub-registry
+      formio_deployment_name: formio
+      formio_container_name: formio
       unit_test_status: ${{ needs.trigger-unit-tests.outputs.test_status }}
       trivy_status: ${{ needs.container_pipeline.outputs.trivy_status }}
 
