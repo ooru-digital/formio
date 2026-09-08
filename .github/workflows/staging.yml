@@ -84,9 +84,6 @@ jobs:
     if: ${{ needs.classify.outputs.tag_kind != 'invalid' && needs.container_pipeline.result == 'success' && needs.trigger-integration-tests.result == 'success' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.deploy_to_eks)) }}
     uses: ./.github/workflows/deploy-eks.yml
     with:
-      aws_region: ${{ vars.AWS_REGION }}
-      aws_role_to_assume: ${{ vars.STAGING_GITHUB_ACTIONS_AWS_ROLE_ARN }}
-      eks_cluster_name: ${{ vars.STAGING_EKS_CLUSTER_NAME }}
       kubernetes_namespace: ${{ vars.STAGING_KUBERNETES_NAMESPACE }}
       manifest_dir: deploy/eks/staging
       docker_image: docker.io/${{ vars.DOCKERHUB_STAGING_IMAGE_REPOSITORY }}:${{ needs.container_pipeline.outputs.image_tag }}
@@ -94,6 +91,7 @@ jobs:
       formio_container_name: formio
       unit_test_status: ${{ needs.trigger-integration-tests.outputs.test_status }}
       trivy_status: ${{ needs.container_pipeline.outputs.trivy_status }}
+      kubeconfig_path: "/home/ubuntu/.kube/stage.conf"
     secrets:
       dockerhub_username: ${{ secrets.DOCKERHUB_USERNAME }}
       dockerhub_token: ${{ secrets.DOCKERHUB_TOKEN }}

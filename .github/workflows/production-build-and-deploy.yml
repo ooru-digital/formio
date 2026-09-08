@@ -78,8 +78,6 @@ jobs:
 
     with:
       aws_region: ${{ vars.AWS_REGION }}
-      aws_role_to_assume: ${{ vars.PRODUCTION_GITHUB_ACTIONS_AWS_ROLE_ARN }}
-      eks_cluster_name: ${{ vars.PRODUCTION_EKS_CLUSTER_NAME }}
       kubernetes_namespace: ${{ vars.PRODUCTION_KUBERNETES_NAMESPACE }}
       manifest_dir: deploy/eks/production
       docker_image: docker.io/${{ vars.DOCKERHUB_IMAGE_REPOSITORY_PROD }}:${{ needs.container_pipeline.outputs.image_tag }}
@@ -88,7 +86,7 @@ jobs:
       formio_container_name: formio
       unit_test_status: ${{ needs.trigger-unit-tests.outputs.test_status }}
       trivy_status: ${{ needs.container_pipeline.outputs.trivy_status }}
-
+      kubeconfig_path: "/home/ubuntu/.kube/prod.conf"
     secrets:
       dockerhub_username: ${{ secrets.DOCKERHUB_USERNAME }}
       dockerhub_token: ${{ secrets.DOCKERHUB_TOKEN }}
