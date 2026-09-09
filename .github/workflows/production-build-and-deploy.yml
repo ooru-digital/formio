@@ -49,9 +49,6 @@ jobs:
       max_image_layers: 35
       max_image_size_mb: 3500
       push_image: true
-      use_aws_auth: false
-      use_custom_kubeconfig: true
-      kubeconfig_path: "/home/ubuntu/.kube/prod.config" 
 
     secrets:
       registry_username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -91,7 +88,7 @@ jobs:
       formio_container_name: formio
       unit_test_status: ${{ needs.trigger-unit-tests.outputs.test_status }}
       trivy_status: ${{ needs.container_pipeline.outputs.trivy_status }}
-      kubeconfig_path: "/home/ubuntu/.kube/prod.conf"
+
     secrets:
       dockerhub_username: ${{ secrets.DOCKERHUB_USERNAME }}
       dockerhub_token: ${{ secrets.DOCKERHUB_TOKEN }}

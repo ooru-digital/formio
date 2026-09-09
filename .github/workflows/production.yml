@@ -25,10 +25,6 @@ jobs:
       docker_image: docker.io/${{ vars.DOCKERHUB_IMAGE_REPOSITORY_PROD }}:${{ inputs.image_tag }}
       unit_test_status: "SKIPPED"
       trivy_status: "SKIPPED"
-      use_aws_auth: false
-      use_custom_kubeconfig: true
-      kubeconfig_path: "/home/ubuntu/.kube/prod.config" 
-      
     secrets:
       dockerhub_username: ${{ secrets.DOCKERHUB_USERNAME }}
       dockerhub_token: ${{ secrets.DOCKERHUB_TOKEN }}

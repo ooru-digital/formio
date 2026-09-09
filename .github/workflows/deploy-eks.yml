@@ -29,14 +29,14 @@ on:
       docker_image:
         required: true
         type: string
-      qrcode_deployment_name:
+      formio_deployment_name:
         required: false
         type: string
-        default: qrcode-generator
-      qrcode_container_name:
+        default: formio
+      formio_container_name:
         required: false
         type: string
-        default: node-express-app
+        default: formio
       # celery_enabled:
       #   required: false
       #   type: boolean
@@ -68,7 +68,8 @@ on:
         required: true
       NEXUS_URL:
         required: true
-        
+
+
 permissions:
   contents: read
 
@@ -92,7 +93,6 @@ jobs:
           echo "kubectl and aws commands below execute directly from that runner."
 
       - name: Configure AWS credentials
-        if: ${{ inputs.use_aws_auth == true }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ inputs.aws_region }}
@@ -104,23 +104,11 @@ jobs:
         with:
           version: latest
 
-      - name: Configure Kubeconfig (AWS vs Custom)
+      - name: Configure kubeconfig
         run: |
-          if [ "${{ inputs.use_custom_kubeconfig }}" = "true" ]; then
-            if [ -z "${{ inputs.kubeconfig_path }}" ]; then
-              echo "::error::use_custom_kubeconfig is true, but kubeconfig_path is empty!"
-              exit 1
-            fi
-            echo "Using custom kubeconfig path: ${{ inputs.kubeconfig_path }}"
-            echo "KUBECONFIG=${{ inputs.kubeconfig_path }}" >> $GITHUB_ENV
-          elif [ "${{ inputs.use_aws_auth }}" = "true" ]; then
-            echo "Using AWS IAM role and updating kubeconfig via aws eks update-kubeconfig..."
-            aws eks update-kubeconfig \
-              --name "${{ inputs.eks_cluster_name }}" \
-              --region "${{ inputs.aws_region }}"
-          else
-            echo "::notice::Skipping external auth/kubeconfig configuration as requested."
-          fi
+          aws eks update-kubeconfig \
+            --name "${{ inputs.eks_cluster_name }}" \
+            --region "${{ inputs.aws_region }}"
 
       - name: Verify cluster access
         id: verify_cluster
@@ -160,6 +148,7 @@ jobs:
           files=(
             "${{ inputs.manifest_dir }}/deployment.yaml"
           )
+
           for file in "${files[@]}"; do
             if [ -f "$file" ]; then
               echo "Applying $file"
@@ -167,20 +156,31 @@ jobs:
             fi
           done
 
-      - name: Update qrcode image
+      - name: Update formio image
         run: |
-          kubectl set image deployment/${{ inputs.qrcode_deployment_name }} \
-            ${{ inputs.qrcode_container_name }}=${{ inputs.docker_image }} \
+          kubectl set image deployment/${{ inputs.formio_deployment_name }} \
+            ${{ inputs.formio_container_name }}=${{ inputs.docker_image }} \
             --namespace "${{ inputs.kubernetes_namespace }}"
 
+      # - name: Update Celery image
+      #   if: ${{ inputs.celery_enabled }}
+      #   run: |
+      #     kubectl set image deployment/${{ inputs.celery_deployment_name }} \
+      #       ${{ inputs.celery_container_name }}=${{ inputs.docker_image }} \
+      #       --namespace "${{ inputs.kubernetes_namespace }}"
 
-      - name: Wait for qrcode rollout
+      - name: Wait for formio rollout
         run: |
-          kubectl rollout status deployment/${{ inputs.qrcode_deployment_name }} \
+          kubectl rollout status deployment/${{ inputs.formio_deployment_name }} \
             --namespace "${{ inputs.kubernetes_namespace }}" \
             --timeout=300s
 
-
+      # - name: Wait for Celery rollout
+      #   if: ${{ inputs.celery_enabled }}
+      #   run: |
+      #     kubectl rollout status deployment/${{ inputs.celery_deployment_name }} \
+      #       --namespace "${{ inputs.kubernetes_namespace }}" \
+      #       --timeout=300s
 
       - name: Download Unit Test Report from Nexus
         if: always()
@@ -199,7 +199,6 @@ jobs:
           curl -sS -f -u "${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}" \
             -o reports/trivy/trivy-report.txt \
             "${{ secrets.NEXUS_URL }}/repository/CredIssuer/reports/${{ github.event.repository.name }}/${{ github.run_id }}/trivy-report.txt" || true
-
 
       - name: Show deployment summary
         run: |
