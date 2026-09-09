@@ -1,25 +1,20 @@
-# NOTE: This is the version you originally shared with me. Your production.yaml
-# and rollback.yaml now pass additional inputs (service_account_name,
-# pod_irsa_role_arn, django_env, aws_env_path, aws_secret_path,
-# aws_did_secret_prefix, api_replicas, celery_replicas, celery_broker_url)
-# that this file does not declare. If your real deploy-eks.yml has already
-# been updated to accept these, replace this file with that current version
-# before using this set — this one will not accept those calls as written.
-
 name: Deploy To EKS
 
 on:
   workflow_call:
     inputs:
       aws_region:
-        required: true
+        required: false
         type: string
+        default: ""
       aws_role_to_assume:
-        required: true
+        required: false
         type: string
+        default: ""
       eks_cluster_name:
-        required: true
+        required: false
         type: string
+        default: ""
       kubernetes_namespace:
         required: true
         type: string
@@ -37,24 +32,29 @@ on:
         required: false
         type: string
         default: formio
-      # celery_enabled:
-      #   required: false
-      #   type: boolean
-      #   default: false
-      # celery_deployment_name:
-      #   required: false
-      #   type: string
-      #   default: credflow-celery
-      # celery_container_name:
-      #   required: false
-      #   type: string
-      #   default: celery
       unit_test_status:
         required: true
         type: string
       trivy_status:
         required: true
         type: string
+      # --- New Toggle Inputs for AWS vs Custom Kubeconfig ---
+      use_aws_auth:
+        description: "Set to true to use AWS IAM role authentication"
+        required: false
+        type: boolean
+        default: true
+      use_custom_kubeconfig:
+        description: "Set to true to use a custom kubeconfig file on the runner"
+        required: false
+        type: boolean
+        default: false
+      kubeconfig_path:
+        description: "Path to the custom kubeconfig file if use_custom_kubeconfig is true"
+        required: false
+        type: string
+        default: ""
+
     secrets:
       dockerhub_username:
         required: true
@@ -77,8 +77,6 @@ jobs:
   deploy:
     name: Deploy To EKS
     runs-on: [self-hosted, linux, x64, aws]
-    # Use this only if your cluster endpoint is publicly reachable:
-    # runs-on: ubuntu-latest
 
     env:
       DISCORD_WEBHOOK: ${{ secrets.DISCORD_STAGING_BUILDS_URL }}
@@ -90,9 +88,10 @@ jobs:
       - name: Explain deploy execution location
         run: |
           echo "This deploy job is running on the GitHub self-hosted runner."
-          echo "kubectl and aws commands below execute directly from that runner."
+          echo "kubectl and commands below execute directly from that runner."
 
       - name: Configure AWS credentials
+        if: ${{ inputs.use_aws_auth == true }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ inputs.aws_region }}
@@ -104,11 +103,28 @@ jobs:
         with:
           version: latest
 
-      - name: Configure kubeconfig
+      - name: Configure Kubeconfig (AWS vs Custom)
         run: |
-          aws eks update-kubeconfig \
-            --name "${{ inputs.eks_cluster_name }}" \
-            --region "${{ inputs.aws_region }}"
+          if [ "${{ inputs.use_custom_kubeconfig }}" = "true" ]; then
+            if [ -z "${{ inputs.kubeconfig_path }}" ]; then
+              echo "::error::use_custom_kubeconfig is true, but kubeconfig_path is empty!"
+              exit 1
+            fi
+            echo "Using custom kubeconfig path: ${{ inputs.kubeconfig_path }}"
+            echo "KUBECONFIG=${{ inputs.kubeconfig_path }}" >> $GITHUB_ENV
+          elif [ "${{ inputs.use_aws_auth }}" = "true" ]; then
+            if [ -z "${{ inputs.aws_region }}" ] || [ -z "${{ inputs.eks_cluster_name }}" ]; then
+              echo "::error::aws_region and eks_cluster_name are required when use_aws_auth is true!"
+              exit 1
+            fi
+            echo "Using AWS IAM role and updating kubeconfig via aws eks update-kubeconfig..."
+            aws eks update-kubeconfig \
+              --name "${{ inputs.eks_cluster_name }}" \
+              --region "${{ inputs.aws_region }}"
+          else
+            echo "::error::Neither AWS auth nor custom kubeconfig was selected!"
+            exit 1
+          fi
 
       - name: Verify cluster access
         id: verify_cluster
@@ -162,25 +178,11 @@ jobs:
             ${{ inputs.formio_container_name }}=${{ inputs.docker_image }} \
             --namespace "${{ inputs.kubernetes_namespace }}"
 
-      # - name: Update Celery image
-      #   if: ${{ inputs.celery_enabled }}
-      #   run: |
-      #     kubectl set image deployment/${{ inputs.celery_deployment_name }} \
-      #       ${{ inputs.celery_container_name }}=${{ inputs.docker_image }} \
-      #       --namespace "${{ inputs.kubernetes_namespace }}"
-
       - name: Wait for formio rollout
         run: |
           kubectl rollout status deployment/${{ inputs.formio_deployment_name }} \
             --namespace "${{ inputs.kubernetes_namespace }}" \
             --timeout=300s
-
-      # - name: Wait for Celery rollout
-      #   if: ${{ inputs.celery_enabled }}
-      #   run: |
-      #     kubectl rollout status deployment/${{ inputs.celery_deployment_name }} \
-      #       --namespace "${{ inputs.kubernetes_namespace }}" \
-      #       --timeout=300s
 
       - name: Download Unit Test Report from Nexus
         if: always()
@@ -216,14 +218,12 @@ jobs:
             DEPLOY_EMOJI="❌"
           fi
 
-          # Check Unit Test report
           if [ -f reports/unit-test/unit-test-report.txt ]; then
             UNIT_REPORT_STATUS="📎 Attached"
           else
             UNIT_REPORT_STATUS="❌ Not available"
           fi
 
-          # Check Trivy report
           if [ -f reports/trivy/trivy-report.txt ]; then
             TRIVY_REPORT_STATUS="📎 Attached"
           else
@@ -260,34 +260,15 @@ jobs:
             -F "content=${CONTENT}"
           )
 
-          # Attach Unit Test Report
           if [ -f reports/unit-test/unit-test-report.txt ]; then
-            echo "Attaching unit test report..."
-            CURL_ARGS+=(
-              -F "file1=@reports/unit-test/unit-test-report.txt"
-            )
+            CURL_ARGS+=(-F "file1=@reports/unit-test/unit-test-report.txt")
           fi
 
-          # Attach Trivy Report ONLY if it exists
           if [ -f reports/trivy/trivy-report.txt ]; then
-            echo "Attaching Trivy report..."
-            CURL_ARGS+=(
-              -F "file2=@reports/trivy/trivy-report.txt"
-            )
-          else
-            echo "Trivy report not found. This is expected when Trivy passed."
+            CURL_ARGS+=(-F "file2=@reports/trivy/trivy-report.txt")
           fi
-
-          echo "Sending final deployment notification..."
 
           curl "${CURL_ARGS[@]}" "$DISCORD_WEBHOOK" || {
             echo "⚠️ Discord notification failed"
-            echo "Deployment status remains: ${DEPLOY_STATUS}"
             exit 0
           }
-
-          # curl "${CURL_ARGS[@]}" "$DISCORD_WEBHOOK" || {
-          #   echo "⚠️ Discord notification failed"
-          #   echo "Deployment status remains: ${DEPLOY_STATUS}"
-          #   exit 0
-          # }
