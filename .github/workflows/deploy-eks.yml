@@ -3,6 +3,18 @@ name: Deploy To EKS
 on:
   workflow_call:
     inputs:
+      aws_region:
+        required: false
+        type: string
+        default: ""
+      aws_role_to_assume:
+        required: false
+        type: string
+        default: ""
+      eks_cluster_name:
+        required: false
+        type: string
+        default: ""
       kubernetes_namespace:
         required: true
         type: string
@@ -26,7 +38,7 @@ on:
       trivy_status:
         required: true
         type: string
-     # --- New Toggle Inputs ---
+      # --- Toggle Inputs ---
       use_aws_auth:
         description: "Set to true to use AWS IAM role authentication"
         required: false
@@ -42,6 +54,7 @@ on:
         required: false
         type: string
         default: ""
+
     secrets:
       dockerhub_username:
         required: true
@@ -64,8 +77,6 @@ jobs:
   deploy:
     name: Deploy To EKS
     runs-on: [self-hosted, linux, x64, aws]
-    # Use this only if your cluster endpoint is publicly reachable:
-    # runs-on: ubuntu-latest
 
     env:
       DISCORD_WEBHOOK: ${{ secrets.DISCORD_STAGING_BUILDS_URL }}
@@ -74,11 +85,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set Custom Kubeconfig Path
-        if: ${{ inputs.kubeconfig_path != '' }}
+      - name: Explain deploy execution location
         run: |
-          echo "Setting KUBECONFIG to ${{ inputs.kubeconfig_path }}"
-          echo "KUBECONFIG=${{ inputs.kubeconfig_path }}" >> $GITHUB_ENV
           echo "This deploy job is running on the GitHub self-hosted runner."
           echo "kubectl and commands below execute directly from that runner."
 
@@ -110,10 +118,9 @@ jobs:
               --name "${{ inputs.eks_cluster_name }}" \
               --region "${{ inputs.aws_region }}"
           else
-            echo "::error::Neither AWS auth nor custom kubeconfig was selected!"
-            exit 1
+            echo "::notice::Skipping external auth/kubeconfig configuration as requested."
           fi
-          
+
       - name: Verify cluster access
         id: verify_cluster
         run: |
@@ -206,14 +213,12 @@ jobs:
             DEPLOY_EMOJI="❌"
           fi
 
-          # Check Unit Test report
           if [ -f reports/unit-test/unit-test-report.txt ]; then
             UNIT_REPORT_STATUS="📎 Attached"
           else
             UNIT_REPORT_STATUS="❌ Not available"
           fi
 
-          # Check Trivy report
           if [ -f reports/trivy/trivy-report.txt ]; then
             TRIVY_REPORT_STATUS="📎 Attached"
           else
@@ -250,34 +255,15 @@ jobs:
             -F "content=${CONTENT}"
           )
 
-          # Attach Unit Test Report
           if [ -f reports/unit-test/unit-test-report.txt ]; then
-            echo "Attaching unit test report..."
-            CURL_ARGS+=(
-              -F "file1=@reports/unit-test/unit-test-report.txt"
-            )
+            CURL_ARGS+=(-F "file1=@reports/unit-test/unit-test-report.txt")
           fi
 
-          # Attach Trivy Report ONLY if it exists
           if [ -f reports/trivy/trivy-report.txt ]; then
-            echo "Attaching Trivy report..."
-            CURL_ARGS+=(
-              -F "file2=@reports/trivy/trivy-report.txt"
-            )
-          else
-            echo "Trivy report not found. This is expected when Trivy passed."
+            CURL_ARGS+=(-F "file2=@reports/trivy/trivy-report.txt")
           fi
-
-          echo "Sending final deployment notification..."
 
           curl "${CURL_ARGS[@]}" "$DISCORD_WEBHOOK" || {
             echo "⚠️ Discord notification failed"
-            echo "Deployment status remains: ${DEPLOY_STATUS}"
             exit 0
           }
-
-          # curl "${CURL_ARGS[@]}" "$DISCORD_WEBHOOK" || {
-          #   echo "⚠️ Discord notification failed"
-          #   echo "Deployment status remains: ${DEPLOY_STATUS}"
-          #   exit 0
-          # }
