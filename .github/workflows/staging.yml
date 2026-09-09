@@ -91,12 +91,8 @@ jobs:
       formio_container_name: formio
       unit_test_status: ${{ needs.trigger-integration-tests.outputs.test_status }}
       trivy_status: ${{ needs.container_pipeline.outputs.trivy_status }}
-<<<<<<< HEAD
-      kubeconfig_path: "/home/ubuntu/.kube/stage.conf"
-=======
       use_aws_auth: true
       use_custom_kubeconfig: false
->>>>>>> 548230dd (updated workflow files)
     secrets:
       dockerhub_username: ${{ secrets.DOCKERHUB_USERNAME }}
       dockerhub_token: ${{ secrets.DOCKERHUB_TOKEN }}

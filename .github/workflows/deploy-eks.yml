@@ -26,13 +26,6 @@ on:
       trivy_status:
         required: true
         type: string
-<<<<<<< HEAD
-      kubeconfig_path:
-        required: false
-        type: string
-        default: ""
-
-=======
      # --- New Toggle Inputs ---
       use_aws_auth:
         description: "Set to true to use AWS IAM role authentication"
@@ -49,7 +42,6 @@ on:
         required: false
         type: string
         default: ""
->>>>>>> 548230dd (updated workflow files)
     secrets:
       dockerhub_username:
         required: true
@@ -85,10 +77,8 @@ jobs:
       - name: Set Custom Kubeconfig Path
         if: ${{ inputs.kubeconfig_path != '' }}
         run: |
-<<<<<<< HEAD
           echo "Setting KUBECONFIG to ${{ inputs.kubeconfig_path }}"
           echo "KUBECONFIG=${{ inputs.kubeconfig_path }}" >> $GITHUB_ENV
-=======
           echo "This deploy job is running on the GitHub self-hosted runner."
           echo "kubectl and commands below execute directly from that runner."
 
@@ -123,8 +113,7 @@ jobs:
             echo "::error::Neither AWS auth nor custom kubeconfig was selected!"
             exit 1
           fi
->>>>>>> 548230dd (updated workflow files)
-
+          
       - name: Verify cluster access
         id: verify_cluster
         run: |
