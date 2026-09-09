@@ -26,11 +26,30 @@ on:
       trivy_status:
         required: true
         type: string
+<<<<<<< HEAD
       kubeconfig_path:
         required: false
         type: string
         default: ""
 
+=======
+     # --- New Toggle Inputs ---
+      use_aws_auth:
+        description: "Set to true to use AWS IAM role authentication"
+        required: false
+        type: boolean
+        default: true
+      use_custom_kubeconfig:
+        description: "Set to true to use a custom kubeconfig file on the runner"
+        required: false
+        type: boolean
+        default: false
+      kubeconfig_path:
+        description: "Path to the custom kubeconfig file if use_custom_kubeconfig is true"
+        required: false
+        type: string
+        default: ""
+>>>>>>> 548230dd (updated workflow files)
     secrets:
       dockerhub_username:
         required: true
@@ -66,8 +85,45 @@ jobs:
       - name: Set Custom Kubeconfig Path
         if: ${{ inputs.kubeconfig_path != '' }}
         run: |
+<<<<<<< HEAD
           echo "Setting KUBECONFIG to ${{ inputs.kubeconfig_path }}"
           echo "KUBECONFIG=${{ inputs.kubeconfig_path }}" >> $GITHUB_ENV
+=======
+          echo "This deploy job is running on the GitHub self-hosted runner."
+          echo "kubectl and commands below execute directly from that runner."
+
+      - name: Configure AWS credentials
+        if: ${{ inputs.use_aws_auth == true }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ inputs.aws_region }}
+          role-to-assume: ${{ inputs.aws_role_to_assume }}
+          role-chaining: true
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: latest
+
+      - name: Configure Kubeconfig (AWS vs Custom)
+        run: |
+          if [ "${{ inputs.use_custom_kubeconfig }}" = "true" ]; then
+            if [ -z "${{ inputs.kubeconfig_path }}" ]; then
+              echo "::error::use_custom_kubeconfig is true, but kubeconfig_path is empty!"
+              exit 1
+            fi
+            echo "Using custom kubeconfig path: ${{ inputs.kubeconfig_path }}"
+            echo "KUBECONFIG=${{ inputs.kubeconfig_path }}" >> $GITHUB_ENV
+          elif [ "${{ inputs.use_aws_auth }}" = "true" ]; then
+            echo "Using AWS IAM role and updating kubeconfig via aws eks update-kubeconfig..."
+            aws eks update-kubeconfig \
+              --name "${{ inputs.eks_cluster_name }}" \
+              --region "${{ inputs.aws_region }}"
+          else
+            echo "::error::Neither AWS auth nor custom kubeconfig was selected!"
+            exit 1
+          fi
+>>>>>>> 548230dd (updated workflow files)
 
       - name: Verify cluster access
         id: verify_cluster
