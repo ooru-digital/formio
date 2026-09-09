@@ -24,7 +24,7 @@ jobs:
       trivy_status: "SKIPPED"
       use_aws_auth: false
       use_custom_kubeconfig: true
-      kubeconfig_path: "/home/runner/.kube/prod.config" 
+      kubeconfig_path: "/home/ubuntu/.kube/prod.config" 
       
     secrets:
       dockerhub_username: ${{ secrets.DOCKERHUB_USERNAME }}
