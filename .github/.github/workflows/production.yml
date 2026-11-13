@@ -1,0 +1,87 @@
+name: Production Deployment
+
+permissions:
+  contents: read
+  id-token: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Enter the Docker image tag to deploy (e.g. v1.0.26 or prod-abc1234)"
+        required: true
+        type: string
+concurrency:
+  group: formio-deployments
+  cancel-in-progress: false
+  queue: max
+jobs:
+  deploy:
+    name: Production Deploy To EKS
+    uses: ./.github/workflows/deploy-eks.yml
+    with:
+      aws_region: ${{ vars.AWS_REGION }}
+      aws_role_to_assume: ${{ vars.PRODUCTION_GITHUB_ACTIONS_AWS_ROLE_ARN }}
+      eks_cluster_name: ${{ vars.PRODUCTION_EKS_CLUSTER_NAME }}
+      kubernetes_namespace: ${{ vars.PRODUCTION_KUBERNETES_NAMESPACE }}
+      manifest_dir: deploy/eks/production
+      docker_image: docker.io/${{ vars.DOCKERHUB_IMAGE_REPOSITORY_PROD }}:${{ inputs.image_tag }}
+      unit_test_status: "SKIPPED"
+      trivy_status: "SKIPPED"
+      use_aws_auth: false
+      use_custom_kubeconfig: true
+      kubeconfig_path: "/home/ubuntu/.kube/prod.conf"
+    secrets:
+      dockerhub_username: ${{ secrets.DOCKERHUB_USERNAME }}
+      dockerhub_token: ${{ secrets.DOCKERHUB_TOKEN }}
+      NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+      NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+      NEXUS_URL: ${{ secrets.NEXUS_URL }}
+
+  notify:
+    name: Pipeline Result Notification
+    needs: [deploy]
+    if: ${{ always() }}
+    runs-on: [self-hosted, linux, x64, aws]
+    env:
+      DISCORD_WEBHOOK: ${{ secrets.DISCORD_PRODUCTION_BUILDS_URL }}
+    steps:
+      - name: Send Discord Alert
+        if: env.DISCORD_WEBHOOK != ''
+        run: |
+          DEPLOY_RESULT="${{ needs.deploy.result }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          if [ "$DEPLOY_RESULT" = "success" ]; then
+            STATUS_EMOJI="✅"
+            STATUS_TEXT="Production Deployment Successful"
+          else
+            STATUS_EMOJI="❌"
+            STATUS_TEXT="Production Deployment Failed"
+          fi
+
+          CONTENT=$(cat <<EOF
+          ${STATUS_EMOJI} **${STATUS_TEXT}**
+
+          **Repository**
+          ${{ github.repository }}
+
+          **Target Tag**
+          ${{ inputs.image_tag }}
+
+          **Docker Image**
+          docker.io/${{ vars.DOCKERHUB_IMAGE_REPOSITORY_PROD }}:${{ inputs.image_tag }}
+
+          **Triggered By**
+          ${{ github.actor }}
+
+          🔗 ${RUN_URL}
+          EOF
+          )
+
+          PAYLOAD=$(jq -n --arg content "$CONTENT" '{content: $content}')
+
+          curl -sS \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$DISCORD_WEBHOOK"
