@@ -12,10 +12,24 @@ on:
         required: true
         default: "main"
         type: string
+
+      deploy_to_eks:
+        description: "Do you want to deploy to Production EKS?"
+        required: true
+        default: true
+        type: boolean
+
+      image_tag:
+        description: "Enter Docker image tag prefix"
+        required: false
+        default: "latest"
+        type: string
+
 concurrency:
   group: formio-deployments
   cancel-in-progress: false
   queue: max
+
 jobs:
   # ---------------------------------------------------------
   # UNIT TESTS
@@ -23,6 +37,10 @@ jobs:
   trigger-unit-tests:
     name: Production Unit Tests
     uses: ./.github/workflows/unit-test.yml
+
+    with:
+      branch: ${{ inputs.branch }}
+
     secrets:
       DISCORD_WEBHOOK: ${{ secrets.DISCORD_PRODUCTION_BUILDS_URL }}
       NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
@@ -34,6 +52,7 @@ jobs:
   # ---------------------------------------------------------
   container_pipeline:
     name: Production Container Pipeline
+
     needs:
       - trigger-unit-tests
 
@@ -42,9 +61,10 @@ jobs:
     uses: ./.github/workflows/container-pipeline.yml
 
     with:
+      branch: ${{ inputs.branch }}
       registry: docker.io
       image_repository: ${{ vars.DOCKERHUB_IMAGE_REPOSITORY_PROD }}
-      image_tag_prefix: prod
+      image_tag_prefix: ${{ inputs.image_tag || 'latest' }}
       django_env: PRODUCTION
       docker_context: .
       dockerfile: Dockerfile
@@ -73,6 +93,7 @@ jobs:
 
     if: >-
       ${{
+        inputs.deploy_to_eks &&
         needs.trigger-unit-tests.result == 'success' &&
         needs.container_pipeline.result == 'success'
       }}
@@ -120,93 +141,135 @@ jobs:
 
     env:
       DISCORD_WEBHOOK: ${{ secrets.DISCORD_PRODUCTION_BUILDS_URL }}
+      NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+      NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+      NEXUS_URL: ${{ secrets.NEXUS_URL }}
+      REPOSITORY_NAME: ${{ github.event.repository.name }}
 
     steps:
       - name: Download Unit Test Report from Nexus
         if: env.DISCORD_WEBHOOK != ''
         continue-on-error: true
+        shell: bash
         run: |
           mkdir -p reports/unit-test
+
           curl -sS -f \
-            -u "${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}" \
+            -u "${NEXUS_USERNAME}:${NEXUS_PASSWORD}" \
             -o reports/unit-test/unit-test-report.txt \
-            "${{ secrets.NEXUS_URL }}/repository/CredIssuer/reports/${{ github.event.repository.name }}/${{ github.run_id }}/unit-test-report.txt" \
-            || true
+            "${NEXUS_URL}/repository/CredIssuer/reports/${REPOSITORY_NAME}/${GITHUB_RUN_ID}/unit-test-report.txt"
 
       - name: Download Trivy Report from Nexus
         if: env.DISCORD_WEBHOOK != ''
         continue-on-error: true
+        shell: bash
         run: |
           mkdir -p reports/trivy
+
           curl -sS -f \
-            -u "${{ secrets.NEXUS_USERNAME }}:${{ secrets.NEXUS_PASSWORD }}" \
+            -u "${NEXUS_USERNAME}:${NEXUS_PASSWORD}" \
             -o reports/trivy/trivy-report.txt \
-            "${{ secrets.NEXUS_URL }}/repository/CredIssuer/reports/${{ github.event.repository.name }}/${{ github.run_id }}/trivy-report.txt" \
-            || true
+            "${NEXUS_URL}/repository/CredIssuer/reports/${REPOSITORY_NAME}/${GITHUB_RUN_ID}/trivy-report.txt"
 
       - name: Determine outcome and send single Discord alert
         if: env.DISCORD_WEBHOOK != ''
+        shell: bash
+
+        env:
+          UNIT_TEST_RESULT: ${{ needs.trigger-unit-tests.result }}
+          CONTAINER_RESULT: ${{ needs.container_pipeline.result }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+          DEPLOY_ENABLED: ${{ inputs.deploy_to_eks }}
+          BUILD_BRANCH: ${{ inputs.branch }}
+          IMAGE_REPOSITORY: ${{ vars.DOCKERHUB_IMAGE_REPOSITORY_PROD }}
+          BUILT_IMAGE_TAG: ${{ needs.container_pipeline.outputs.image_tag }}
+
         run: |
+          set -euo pipefail
+
           FAILED_STAGE=""
           REASON=""
+          DEPLOY_DISPLAY="$DEPLOY_RESULT"
 
-          UNIT_TEST_RESULT="${{ needs.trigger-unit-tests.result }}"
-          CONTAINER_RESULT="${{ needs.container_pipeline.result }}"
-          DEPLOY_RESULT="${{ needs.deploy.result }}"
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if [ "$DEPLOY_ENABLED" != "true" ]; then
+            DEPLOY_DISPLAY="skipped (disabled by user)"
+          fi
 
           if [ "$UNIT_TEST_RESULT" = "failure" ]; then
             FAILED_STAGE="Unit Tests"
-            REASON="Unit test pass percentage was below the required threshold."
+            REASON="Unit test job failed. Check the job logs."
           elif [ "$CONTAINER_RESULT" = "failure" ]; then
             FAILED_STAGE="Container Pipeline"
-            REASON="Build, Gitleaks, Trivy, or Docker push failed."
+            REASON="Build, security scans, or Docker push failed."
           elif [ "$DEPLOY_RESULT" = "failure" ]; then
             FAILED_STAGE="Deploy To EKS"
-            REASON="Deployment failed, or rollout did not become healthy within the timeout."
+            REASON="Deployment failed, or rollout did not become healthy."
           fi
 
           if [ -n "$FAILED_STAGE" ]; then
-            CONTENT=$(cat <<EOF
-          ❌ **Production Build & Deploy Failed**
-
-          **Repository** : ${{ github.repository }}
-          **Branch** : ${{ inputs.branch }}
-          **Failed Stage** : ${FAILED_STAGE}
-          **Reason** : ${REASON}
-
-          **Pipeline Status**
-          Unit Tests       : ${UNIT_TEST_RESULT}
-          Container Build  : ${CONTAINER_RESULT}
-          Deploy To EKS    : ${DEPLOY_RESULT}
-
-          **Triggered By** : ${{ github.actor }}
-          🔗 ${RUN_URL}
-          EOF
-            )
+            TITLE="❌ Production Pipeline Failed"
+          elif [ "$UNIT_TEST_RESULT" = "cancelled" ] ||
+               [ "$CONTAINER_RESULT" = "cancelled" ] ||
+               [ "$DEPLOY_RESULT" = "cancelled" ]; then
+            TITLE="⚠️ Production Pipeline Cancelled"
+            REASON="One or more pipeline stages were cancelled."
+          elif [ "$UNIT_TEST_RESULT" = "success" ] &&
+               [ "$CONTAINER_RESULT" = "success" ] &&
+               { [ "$DEPLOY_ENABLED" != "true" ] ||
+                 [ "$DEPLOY_RESULT" = "success" ]; }; then
+            if [ "$DEPLOY_ENABLED" = "true" ]; then
+              TITLE="✅ Production Build & Deploy Successful"
+            else
+              TITLE="✅ Production Build Successful"
+              REASON="Deployment was disabled by user."
+            fi
           else
-            CONTENT=$(cat <<EOF
-          ✅ **Production Build & Deploy Successful**
+            TITLE="⚠️ Production Pipeline Incomplete"
+            REASON="One or more required stages did not complete successfully."
+          fi
 
-          **Repository** : ${{ github.repository }}
-          **Branch** : ${{ inputs.branch }}
+          DOCKER_IMAGE="Not available"
+
+          if [ -n "$BUILT_IMAGE_TAG" ]; then
+            DOCKER_IMAGE="docker.io/${IMAGE_REPOSITORY}:${BUILT_IMAGE_TAG}"
+          fi
+
+          CONTENT=$(cat <<EOF
+          **${TITLE}**
+
+          **Repository** : ${GITHUB_REPOSITORY}
+          **Branch** : ${BUILD_BRANCH}
+          **Deploy Enabled** : ${DEPLOY_ENABLED}
+          EOF
+          )
+
+          if [ -n "$FAILED_STAGE" ]; then
+            CONTENT+=$'\n'"**Failed Stage** : ${FAILED_STAGE}"
+          fi
+
+          if [ -n "$REASON" ]; then
+            CONTENT+=$'\n'"**Reason** : ${REASON}"
+          fi
+
+          CONTENT+=$(cat <<EOF
+
 
           **Pipeline Status**
           Unit Tests       : ${UNIT_TEST_RESULT}
           Container Build  : ${CONTAINER_RESULT}
-          Deploy To EKS    : ${DEPLOY_RESULT}
+          Deploy To EKS    : ${DEPLOY_DISPLAY}
 
-          **Docker Image** : docker.io/${{ vars.DOCKERHUB_IMAGE_REPOSITORY_PROD }}:${{ needs.container_pipeline.outputs.image_tag }}
-          **Triggered By** : ${{ github.actor }}
+          **Docker Image** : ${DOCKER_IMAGE}
+          **Triggered By** : ${GITHUB_ACTOR}
           🔗 ${RUN_URL}
           EOF
-            )
-          fi
+          )
 
           PAYLOAD=$(jq -n --arg content "$CONTENT" '{content: $content}')
 
-          curl -sS \
+          curl -sS --fail-with-body \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" \
             "$DISCORD_WEBHOOK"
