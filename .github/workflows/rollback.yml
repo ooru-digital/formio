@@ -32,7 +32,10 @@ on:
         description: "Docker image tag (required for image rollback)"
         required: false
         type: string
-
+concurrency:
+  group: formio-deployments
+  cancel-in-progress: false
+  queue: max
 jobs:
   rollback:
     name: Kubernetes Rollback
