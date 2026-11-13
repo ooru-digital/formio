@@ -12,7 +12,10 @@ on:
         required: true
         default: "main"
         type: string
-
+concurrency:
+  group: formio-deployments
+  cancel-in-progress: false
+  queue: max
 jobs:
   # ---------------------------------------------------------
   # UNIT TESTS
